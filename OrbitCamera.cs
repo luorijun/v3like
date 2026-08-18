@@ -42,8 +42,8 @@ internal sealed class OrbitCamera
             if (mouse.MiddleButton == ButtonState.Pressed &&
                 _previousMouseState.MiddleButton == ButtonState.Pressed)
             {
-                _yaw -= (mouse.X - _previousMouseState.X) * RotationPerPixel;
-                _pitch -= (mouse.Y - _previousMouseState.Y) * RotationPerPixel;
+                _yaw += (mouse.X - _previousMouseState.X) * RotationPerPixel;
+                _pitch += (mouse.Y - _previousMouseState.Y) * RotationPerPixel;
             }
 
             var zoomExponent = -(mouse.ScrollWheelValue - _previousMouseState.ScrollWheelValue) * 0.0012f;

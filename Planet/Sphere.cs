@@ -39,12 +39,12 @@ internal sealed class Sphere : IDisposable
         _guideLinePrimitiveCount = _guideLineVertexBuffer.VertexCount / 2;
         _solidRasterizerState = new RasterizerState
         {
-            CullMode = CullMode.CullCounterClockwiseFace,
+            CullMode = CullMode.CullClockwiseFace,
             FillMode = FillMode.Solid,
         };
         _wireframeRasterizerState = new RasterizerState
         {
-            CullMode = CullMode.CullCounterClockwiseFace,
+            CullMode = CullMode.CullClockwiseFace,
             FillMode = FillMode.WireFrame,
         };
 
