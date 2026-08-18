@@ -1,7 +1,6 @@
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
-using monogame.Sphere;
 
 namespace monogame;
 
@@ -9,7 +8,7 @@ public sealed class GameApp : Game
 {
     private readonly GraphicsDeviceManager _graphics;
     private readonly OrbitCamera _camera = new();
-    private CubeSphere _sphere;
+    private Planet.Sphere _sphere;
 
     public GameApp()
     {
@@ -27,7 +26,7 @@ public sealed class GameApp : Game
 
     protected override void LoadContent()
     {
-        _sphere = new CubeSphere(GraphicsDevice);
+        _sphere = new Planet.Sphere(GraphicsDevice);
     }
 
     protected override void Update(GameTime gameTime)

@@ -3,9 +3,9 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using monogame.Utils;
 
-namespace monogame.Sphere;
+namespace monogame.Planet;
 
-internal sealed class CubeSphere : IDisposable
+internal sealed class Sphere : IDisposable
 {
     private const int ChunkResolution = 17;
     private const int MaximumLod = 7;
@@ -15,9 +15,9 @@ internal sealed class CubeSphere : IDisposable
     private readonly BasicEffect _effect;
     private readonly IndexBuffer _indexBuffer;
     private readonly RasterizerState _rasterizerState;
-    private readonly CubeFace[] _faces;
+    private readonly Face[] _faces;
 
-    public CubeSphere(GraphicsDevice graphicsDevice)
+    public Sphere(GraphicsDevice graphicsDevice)
     {
         _graphicsDevice = graphicsDevice;
         _effect = CreateEffect(graphicsDevice);
@@ -29,10 +29,10 @@ internal sealed class CubeSphere : IDisposable
         };
 
         var triangleCount = _indexBuffer.IndexCount / 3;
-        _faces = new CubeFace[CubeSphereProjection.FaceBases.Length];
+        _faces = new Face[CubeSphereProjection.FaceBases.Length];
         for (var index = 0; index < _faces.Length; index++)
         {
-            _faces[index] = new CubeFace(
+            _faces[index] = new Face(
                 graphicsDevice,
                 CubeSphereProjection.FaceBases[index],
                 ChunkResolution,

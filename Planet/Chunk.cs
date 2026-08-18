@@ -4,12 +4,12 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using monogame.Terrain;
 
-namespace monogame.Sphere;
+namespace monogame.Planet;
 
-internal sealed class SphereChunk : IDisposable
+internal sealed class Chunk : IDisposable
 {
     private readonly GraphicsDevice _graphicsDevice;
-    private readonly CubeFace _face;
+    private readonly Face _face;
     private readonly int _resolution;
     private readonly int _maximumLod;
     private readonly float _splitThresholdPixels;
@@ -22,11 +22,11 @@ internal sealed class SphereChunk : IDisposable
     private readonly float _boundsRadius;
     private readonly VertexBuffer _vertexBuffer;
 
-    private SphereChunk[] _children;
+    private Chunk[] _children;
 
-    public SphereChunk(
+    public Chunk(
         GraphicsDevice graphicsDevice,
-        CubeFace face,
+        Face face,
         int level,
         int x,
         int y,
@@ -143,9 +143,9 @@ internal sealed class SphereChunk : IDisposable
         ];
     }
 
-    private SphereChunk CreateChild(int level, int x, int y)
+    private Chunk CreateChild(int level, int x, int y)
     {
-        return new SphereChunk(
+        return new Chunk(
             _graphicsDevice,
             _face,
             level,

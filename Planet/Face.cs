@@ -2,14 +2,14 @@ using System;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 
-namespace monogame.Sphere;
+namespace monogame.Planet;
 
-internal sealed class CubeFace : IDisposable
+internal sealed class Face : IDisposable
 {
     private readonly CubeFaceBasis _basis;
-    private readonly SphereChunk _root;
+    private readonly Chunk _root;
 
-    public CubeFace(
+    public Face(
         GraphicsDevice graphicsDevice,
         CubeFaceBasis basis,
         int chunkResolution,
@@ -18,7 +18,7 @@ internal sealed class CubeFace : IDisposable
         int triangleCount)
     {
         _basis = basis;
-        _root = new SphereChunk(
+        _root = new Chunk(
             graphicsDevice,
             this,
             level: 0,
