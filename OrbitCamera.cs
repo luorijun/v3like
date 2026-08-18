@@ -11,8 +11,9 @@ internal sealed class OrbitCamera
 
     private const float MinimumDistance = 1.004f;
     private const float MaximumDistance = 4.0f;
+    private const float RotationPerPixel = 0.005f;
 
-    private int _previousScrollWheelValue = Mouse.GetState().ScrollWheelValue;
+    private MouseState _previousMouseState = Mouse.GetState();
     private float _yaw = 0.75f;
     private float _pitch = 0.35f;
     private float _distance = 2.8f;
@@ -37,29 +38,15 @@ internal sealed class OrbitCamera
         else
         {
             var elapsedSeconds = (float)gameTime.ElapsedGameTime.TotalSeconds;
-            var rotation = 0.9f * elapsedSeconds;
 
-            if (keyboard.IsKeyDown(Keys.Left))
+            if (mouse.MiddleButton == ButtonState.Pressed &&
+                _previousMouseState.MiddleButton == ButtonState.Pressed)
             {
-                _yaw -= rotation;
+                _yaw -= (mouse.X - _previousMouseState.X) * RotationPerPixel;
+                _pitch -= (mouse.Y - _previousMouseState.Y) * RotationPerPixel;
             }
 
-            if (keyboard.IsKeyDown(Keys.Right))
-            {
-                _yaw += rotation;
-            }
-
-            if (keyboard.IsKeyDown(Keys.Up))
-            {
-                _pitch += rotation;
-            }
-
-            if (keyboard.IsKeyDown(Keys.Down))
-            {
-                _pitch -= rotation;
-            }
-
-            var zoomExponent = -(mouse.ScrollWheelValue - _previousScrollWheelValue) * 0.0012f;
+            var zoomExponent = -(mouse.ScrollWheelValue - _previousMouseState.ScrollWheelValue) * 0.0012f;
             if (keyboard.IsKeyDown(Keys.PageUp))
             {
                 zoomExponent -= 1.5f * elapsedSeconds;
@@ -73,7 +60,8 @@ internal sealed class OrbitCamera
             _distance *= MathF.Exp(zoomExponent);
         }
 
-        _previousScrollWheelValue = mouse.ScrollWheelValue;
+        _previousMouseState = mouse;
+        _yaw = MathHelper.WrapAngle(_yaw);
         _pitch = MathHelper.Clamp(_pitch, -1.45f, 1.45f);
         _distance = MathHelper.Clamp(_distance, MinimumDistance, MaximumDistance);
 
