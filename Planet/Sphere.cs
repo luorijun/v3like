@@ -14,6 +14,7 @@ internal sealed class Sphere : IDisposable {
     private const int RotationAxisSegments = 64;
     private const float TropicLatitudeDegrees = 23.44f;
     private const float GuideLineSurfaceOffset = 0.001f;
+    private const float WireframeDepthBias = -0.00001f;
     private const float RotationAxisHalfLength = 1.15f;
 
     private readonly GraphicsDevice _graphicsDevice;
@@ -48,6 +49,7 @@ internal sealed class Sphere : IDisposable {
         _wireframeRasterizerState = new RasterizerState {
             CullMode = CullMode.CullClockwiseFace,
             FillMode = FillMode.WireFrame,
+            DepthBias = WireframeDepthBias,
         };
 
         var triangleCount = _indexBuffer.IndexCount / 3;
@@ -87,7 +89,7 @@ internal sealed class Sphere : IDisposable {
         }
 
         if (options.ShowWireframe) {
-            DrawSphereGeometry(_wireframeEffect, BlendState.Opaque, DepthStencilState.None, _wireframeRasterizerState);
+            DrawSphereGeometry(_wireframeEffect, BlendState.Opaque, DepthStencilState.DepthRead, _wireframeRasterizerState);
         }
 
         if (options.ShowGuideLines) {
@@ -125,7 +127,7 @@ internal sealed class Sphere : IDisposable {
 
     private void DrawGuideLines() {
         _graphicsDevice.BlendState = BlendState.Opaque;
-        _graphicsDevice.DepthStencilState = DepthStencilState.None;
+        _graphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
         _graphicsDevice.RasterizerState = RasterizerState.CullNone;
         _graphicsDevice.SetVertexBuffer(_guideLineVertexBuffer);
 
