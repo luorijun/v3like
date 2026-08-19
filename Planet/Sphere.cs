@@ -7,8 +7,8 @@ using monogame.Utils;
 namespace monogame.Planet;
 
 internal sealed class Sphere : IDisposable {
-    private const int ChunkResolution = 17;
-    private const int MaximumLod = 7;
+    private const int ChunkResolution = 33;
+    private const int MaximumLod = 8;
     private const float SplitThresholdPixels = 220.0f;
     private const int GuideLineSegments = 256;
     private const int RotationAxisSegments = 64;
