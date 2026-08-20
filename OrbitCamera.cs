@@ -17,11 +17,7 @@ internal sealed class OrbitCamera {
     private float _pitch = 0.35f;
     private float _distance = 2.8f;
 
-    public Vector3 Position { get; private set; }
-
-    public Matrix View { get; private set; }
-
-    public Matrix Projection { get; private set; }
+    public View View { get; private set; }
 
     public void Update(GameTime gameTime, Viewport viewport) {
         var keyboard = Keyboard.GetState();
@@ -58,13 +54,27 @@ internal sealed class OrbitCamera {
         _distance = MathHelper.Clamp(_distance, MinimumDistance, MaximumDistance);
 
         var horizontalRadius = MathF.Cos(_pitch) * _distance;
-        Position = new Vector3(MathF.Cos(_yaw) * horizontalRadius, MathF.Sin(_pitch) * _distance, MathF.Sin(_yaw) * horizontalRadius);
-
-        View = Matrix.CreateLookAt(Position, Vector3.Zero, Vector3.Up);
+        var position = new Vector3(
+            MathF.Cos(_yaw) * horizontalRadius,
+            MathF.Sin(_pitch) * _distance,
+            MathF.Sin(_yaw) * horizontalRadius
+        );
+        var viewMatrix = Matrix.CreateLookAt(position, Vector3.Zero, Vector3.Up);
 
         var aspectRatio = Math.Max(1, viewport.Width) / (float)Math.Max(1, viewport.Height);
         var altitude = _distance - 1.0f;
         var nearPlane = MathHelper.Clamp(altitude * 0.2f, 0.0001f, 0.1f);
-        Projection = Matrix.CreatePerspectiveFieldOfView(FieldOfView, aspectRatio, nearPlane, 10.0f);
+        var projectionMatrix = Matrix.CreatePerspectiveFieldOfView(
+            FieldOfView,
+            aspectRatio,
+            nearPlane,
+            10.0f
+        );
+        View = new View(
+            position,
+            FieldOfView,
+            viewport.Height,
+            viewMatrix * projectionMatrix
+        );
     }
 }

@@ -42,7 +42,8 @@ internal sealed class BoundaryExtremaReferenceElevationSource : IReferenceElevat
 
     public BoundaryExtremaReferenceElevationSource(
         float maximumElevation = 0.0015f,
-        float minimumElevation = -0.0015f) {
+        float minimumElevation = -0.0015f
+    ) {
         _maximumElevation = maximumElevation;
         _minimumElevation = minimumElevation;
     }
