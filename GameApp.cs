@@ -28,7 +28,6 @@ public sealed class GameApp : Game {
         _sphere = Sphere.Create(
             data,
             GraphicsDevice,
-            minimumLod: 0,
             splitThreshold: 1.5f
         );
     }
@@ -47,7 +46,7 @@ public sealed class GameApp : Game {
 
     protected override void Draw(GameTime gameTime) {
         GraphicsDevice.Clear(new Color(7, 11, 18));
-        _sphere.Draw();
+        _sphere.Draw(_camera.View);
         base.Draw(gameTime);
     }
 

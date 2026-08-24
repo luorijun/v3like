@@ -10,25 +10,21 @@ using monogame.Utils;
 
 namespace monogame.Planet;
 
-internal sealed class AssetData {
+internal sealed class SphereData {
     internal const int FaceCount = 6;
 
-    internal AssetData(
+    internal SphereData(
         float referenceRadius,
         int chunkResolution,
         int maximumLod,
-        float elevationQuantizationStep,
         float occluderRadius,
-        short[][] elevations,
-        ChunkData[][] chunks
+        FaceData[] faces
     ) {
         ReferenceRadius = referenceRadius;
         ChunkResolution = chunkResolution;
         MaximumLod = maximumLod;
-        ElevationQuantizationStep = elevationQuantizationStep;
         OccluderRadius = occluderRadius;
-        Elevations = elevations;
-        Chunks = chunks;
+        Faces = faces;
     }
 
     public float ReferenceRadius { get; }
@@ -37,17 +33,40 @@ internal sealed class AssetData {
 
     public int MaximumLod { get; }
 
-    public float ElevationQuantizationStep { get; }
-
     public float OccluderRadius { get; }
 
-    internal short[][] Elevations { get; }
-
-    internal ChunkData[][] Chunks { get; }
+    internal FaceData[] Faces { get; }
 
     internal int FinestIntervals => checked((ChunkResolution - 1) * (1 << MaximumLod));
 
     internal int FinestResolution => checked(FinestIntervals + 1);
+}
+
+internal sealed class FaceData {
+    private readonly short[] _elevations;
+    private readonly float _elevationQuantizationStep;
+
+    internal FaceData(
+        int resolution,
+        float elevationQuantizationStep,
+        short[] elevations,
+        ChunkData[] chunks
+    ) {
+        Resolution = resolution;
+        _elevationQuantizationStep = elevationQuantizationStep;
+        _elevations = elevations;
+        Chunks = chunks;
+    }
+
+    public int Resolution { get; }
+
+    internal ReadOnlySpan<short> QuantizedElevations => _elevations;
+
+    internal ChunkData[] Chunks { get; }
+
+    internal float GetElevationUnchecked(int x, int y) {
+        return _elevations[y * Resolution + x] * _elevationQuantizationStep;
+    }
 }
 
 internal readonly record struct ChunkData(
@@ -72,7 +91,7 @@ internal static class Asset {
     private const int ProjectionVersion = 1;
     private const int TriangleTopologyVersion = 1;
 
-    public static AssetData Read(Stream source) {
+    public static SphereData Read(Stream source) {
         ArgumentNullException.ThrowIfNull(source);
         if (!source.CanRead || !source.CanSeek) {
             throw new ArgumentException("The terrain LOD asset stream must be readable and seekable.", nameof(source));
@@ -119,20 +138,19 @@ internal static class Asset {
             elevationQuantizationStep
         );
         var data = Build(settings, elevationSource);
-        Write(destination, data);
+        Write(destination, settings, data);
     }
 
-    private static void Write(Stream destination, AssetData data) {
+    private static void Write(Stream destination, in Geometry settings, SphereData data) {
         using var writer = new BinaryWriter(destination, System.Text.Encoding.UTF8, leaveOpen: true);
-        var settings = Geometry.From(data);
         var heightSectionLength = checked(
-            (long)AssetData.FaceCount
+            (long)SphereData.FaceCount
             * settings.FinestResolution
             * settings.FinestResolution
             * sizeof(short)
         );
         var chunkSectionLength = checked(
-            (long)AssetData.FaceCount * GetChunkCount(settings.MaximumLod) * ChunkSize
+            (long)SphereData.FaceCount * GetChunkCount(settings.MaximumLod) * ChunkSize
         );
         var heightSectionOffset = (long)HeaderSize;
         var chunkSectionOffset = checked(heightSectionOffset + heightSectionLength);
@@ -147,17 +165,18 @@ internal static class Asset {
         writer.Write(settings.MaximumLod);
         writer.Write(settings.ElevationQuantizationStep);
         writer.Write(settings.FinestResolution);
-        writer.Write(AssetData.FaceCount);
-        writer.Write(checked(AssetData.FaceCount * GetChunkCount(settings.MaximumLod)));
+        writer.Write(SphereData.FaceCount);
+        writer.Write(checked(SphereData.FaceCount * GetChunkCount(settings.MaximumLod)));
         writer.Write(data.OccluderRadius);
         WriteSection(writer, Section.ReferenceHeights, heightSectionOffset, heightSectionLength);
         WriteSection(writer, Section.ChunkMetadata, chunkSectionOffset, chunkSectionLength);
         WriteSection(writer, Section.Checksums, checksumSectionOffset, ReferenceGeometryHashSize);
 
-        foreach (var elevations in data.Elevations) {
+        foreach (var face in data.Faces) {
+            var elevations = face.QuantizedElevations;
             if (BitConverter.IsLittleEndian) {
                 writer.Flush();
-                destination.Write(MemoryMarshal.AsBytes(elevations.AsSpan()));
+                destination.Write(MemoryMarshal.AsBytes(elevations));
             }
             else {
                 foreach (var elevation in elevations) {
@@ -166,8 +185,8 @@ internal static class Asset {
             }
         }
 
-        foreach (var chunks in data.Chunks) {
-            foreach (var chunk in chunks) {
+        foreach (var face in data.Faces) {
+            foreach (var chunk in face.Chunks) {
                 WriteVector3(writer, chunk.CenterDirection);
                 writer.Write(chunk.AngularRadius);
                 writer.Write(chunk.MinimumRadius);
@@ -179,18 +198,18 @@ internal static class Asset {
             }
         }
 
-        writer.Write(CalculateReferenceGeometryHash(data));
+        writer.Write(CalculateReferenceGeometryHash(settings, data));
     }
 
-    private static AssetData Build(
+    private static SphereData Build(
         in Geometry settings,
         IReferenceElevationSource elevationSource
     ) {
         var faceElevations = SampleAndQuantize(settings, elevationSource);
-        var faceChunks = new ChunkData[AssetData.FaceCount][];
+        var faceChunks = new ChunkData[SphereData.FaceCount][];
 
-        for (var faceIndex = 0; faceIndex < AssetData.FaceCount; faceIndex++) {
-            var face = (CubeFace)faceIndex;
+        for (var faceIndex = 0; faceIndex < SphereData.FaceCount; faceIndex++) {
+            var face = (FaceId)faceIndex;
             var positions = CreateReferencePositions(settings, face, faceElevations[faceIndex]);
             var chunks = new ChunkData[GetChunkCount(settings.MaximumLod)];
             BuildFaceChunks(settings, face, positions, chunks);
@@ -199,15 +218,7 @@ internal static class Asset {
 
         var occluderRadius = CalculateOccluderRadius(faceChunks);
         BuildHorizonPoints(occluderRadius, faceChunks);
-        return new AssetData(
-            settings.ReferenceRadius,
-            settings.ChunkResolution,
-            settings.MaximumLod,
-            settings.ElevationQuantizationStep,
-            occluderRadius,
-            faceElevations,
-            faceChunks
-        );
+        return CreateSphereData(settings, occluderRadius, faceElevations, faceChunks);
     }
 
     private static short[][] SampleAndQuantize(
@@ -217,18 +228,18 @@ internal static class Asset {
         var resolution = settings.FinestResolution;
         var intervals = settings.FinestIntervals;
         var sampleCount = checked(resolution * resolution);
-        var faces = new short[AssetData.FaceCount][];
+        var faces = new short[SphereData.FaceCount][];
         var sharedBoundaryElevations = new Dictionary<SurfaceKey, short>(intervals * 12 + 8);
 
-        for (var faceIndex = 0; faceIndex < AssetData.FaceCount; faceIndex++) {
-            var face = (CubeFace)faceIndex;
-            var mesh = Mesh.CreateSphere(
+        for (var faceIndex = 0; faceIndex < SphereData.FaceCount; faceIndex++) {
+            var face = (FaceId)faceIndex;
+            var orientation = Face.GetOrientation(face);
+            var directions = Mesh.CreateGrid(
                 resolution,
                 new Vector2(-1.0f, -1.0f),
                 2.0f,
-                Face.GetOrientation(face)
+                (_, _, point) => Mesh.GetSphereDirection(point, orientation)
             );
-            var directions = mesh.Positions;
             var elevations = new short[sampleCount];
             faces[faceIndex] = elevations;
 
@@ -284,38 +295,34 @@ internal static class Asset {
 
     private static Vector3[] CreateReferencePositions(
         in Geometry settings,
-        CubeFace face,
+        FaceId face,
         short[] quantizedElevations
     ) {
         var resolution = settings.FinestResolution;
-        var mesh = Mesh.CreateSphere(
+        var referenceRadius = settings.ReferenceRadius;
+        var elevationQuantizationStep = settings.ElevationQuantizationStep;
+        var orientation = Face.GetOrientation(face);
+        return Mesh.CreateGrid(
             resolution,
             new Vector2(-1.0f, -1.0f),
             2.0f,
-            Face.GetOrientation(face)
-        );
-        var directions = mesh.Positions;
-        var positions = new Vector3[quantizedElevations.Length];
-
-        for (var y = 0; y < resolution; y++) {
-            for (var x = 0; x < resolution; x++) {
+            (x, y, point) => {
+                var direction = Mesh.GetSphereDirection(point, orientation);
                 var sampleIndex = y * resolution + x;
-                var elevation = quantizedElevations[sampleIndex] * settings.ElevationQuantizationStep;
-                var radius = settings.ReferenceRadius + elevation;
+                var elevation = quantizedElevations[sampleIndex] * elevationQuantizationStep;
+                var radius = referenceRadius + elevation;
                 if (!float.IsFinite(radius) || radius <= 0.0f) {
                     throw new InvalidOperationException("A quantized reference elevation produces a non-positive planet radius.");
                 }
 
-                positions[sampleIndex] = directions[sampleIndex] * radius;
+                return direction * radius;
             }
-        }
-
-        return positions;
+        );
     }
 
     private static void BuildFaceChunks(
         in Geometry settings,
-        CubeFace face,
+        FaceId face,
         Vector3[] positions,
         ChunkData[] chunks
     ) {
@@ -323,8 +330,17 @@ internal static class Asset {
             var chunksPerAxis = 1 << level;
             for (var y = 0; y < chunksPerAxis; y++) {
                 for (var x = 0; x < chunksPerAxis; x++) {
-                    var id = new ChunkId(face, level, x, y);
-                    chunks[Face.GetChunkIndex(id)] = BuildChunk(settings, id, positions, chunks);
+                    var id = Chunk.GetId(level, x, y);
+                    chunks[checked((int)id)] = BuildChunk(
+                        settings,
+                        face,
+                        level,
+                        x,
+                        y,
+                        id,
+                        positions,
+                        chunks
+                    );
                 }
             }
         }
@@ -332,17 +348,21 @@ internal static class Asset {
 
     private static ChunkData BuildChunk(
         in Geometry settings,
-        in ChunkId id,
+        FaceId face,
+        int level,
+        int chunkX,
+        int chunkY,
+        uint id,
         Vector3[] positions,
         ChunkData[] chunks
     ) {
         var cellsPerChunk = settings.ChunkResolution - 1;
-        var scale = 1 << (settings.MaximumLod - id.Level);
-        var startX = checked(id.X * cellsPerChunk * scale);
-        var startY = checked(id.Y * cellsPerChunk * scale);
+        var scale = 1 << (settings.MaximumLod - level);
+        var startX = checked(chunkX * cellsPerChunk * scale);
+        var startY = checked(chunkY * cellsPerChunk * scale);
         var endX = checked(startX + cellsPerChunk * scale);
         var endY = checked(startY + cellsPerChunk * scale);
-        var centerDirection = GetChunkCenterDirection(id);
+        var centerDirection = GetChunkCenterDirection(face, level, chunkX, chunkY);
 
         var angularRadius = 0.0;
         var maximumRadius = 0.0;
@@ -358,13 +378,12 @@ internal static class Asset {
 
         var minimumRadius = CalculateCurrentMinimumRadius(settings, startX, startY, scale, positions);
         var childError = 0.0;
-        if (id.Level < settings.MaximumLod) {
-            for (var childY = 0; childY < 2; childY++) {
-                for (var childX = 0; childX < 2; childX++) {
-                    var child = chunks[Face.GetChunkIndex(id.Child(childX, childY))];
-                    minimumRadius = Math.Min(minimumRadius, child.MinimumRadius);
-                    childError = Math.Max(childError, child.GeometricError);
-                }
+        if (level < settings.MaximumLod) {
+            for (var index = 0; index < 4; index++) {
+                var childId = Chunk.GetChildId(id, (ChunkQuadrant)index);
+                var child = chunks[checked((int)childId)];
+                minimumRadius = Math.Min(minimumRadius, child.MinimumRadius);
+                childError = Math.Max(childError, child.GeometricError);
             }
         }
 
@@ -379,7 +398,7 @@ internal static class Asset {
             }
         }
 
-        var directError = id.Level == settings.MaximumLod
+        var directError = level == settings.MaximumLod
             ? 0.0
             : CalculateDirectError(settings, startX, startY, scale, positions);
         var geometricError = Math.Max(directError, childError);
@@ -395,12 +414,12 @@ internal static class Asset {
         );
     }
 
-    private static Vector3 GetChunkCenterDirection(in ChunkId id) {
-        var chunksPerAxis = 1 << id.Level;
+    private static Vector3 GetChunkCenterDirection(FaceId face, int level, int x, int y) {
+        var chunksPerAxis = 1 << level;
         var chunkSize = 2.0f / chunksPerAxis;
-        var u = -1.0f + (id.X + 0.5f) * chunkSize;
-        var v = -1.0f + (id.Y + 0.5f) * chunkSize;
-        return Mesh.GetSpherePosition(u, v, Face.GetOrientation(id.Face));
+        var u = -1.0f + (x + 0.5f) * chunkSize;
+        var v = -1.0f + (y + 0.5f) * chunkSize;
+        return Mesh.GetSphereDirection(new Vector2(u, v), Face.GetOrientation(face));
     }
 
     private static double CalculateCurrentMinimumRadius(
@@ -594,16 +613,16 @@ internal static class Asset {
         return encoded > value ? MathF.BitDecrement(encoded) : encoded;
     }
 
-    private static SurfaceKey GetSurfaceKey(CubeFace face, int x, int y, int intervals) {
+    private static SurfaceKey GetSurfaceKey(FaceId face, int x, int y, int intervals) {
         var u = checked(x * 2 - intervals);
         var v = checked(y * 2 - intervals);
         return face switch {
-            CubeFace.PositiveX => new SurfaceKey(intervals, v, -u),
-            CubeFace.NegativeX => new SurfaceKey(-intervals, v, u),
-            CubeFace.PositiveY => new SurfaceKey(u, intervals, -v),
-            CubeFace.NegativeY => new SurfaceKey(u, -intervals, v),
-            CubeFace.PositiveZ => new SurfaceKey(u, v, intervals),
-            CubeFace.NegativeZ => new SurfaceKey(-u, v, -intervals),
+            FaceId.PositiveX => new SurfaceKey(intervals, v, -u),
+            FaceId.NegativeX => new SurfaceKey(-intervals, v, u),
+            FaceId.PositiveY => new SurfaceKey(u, intervals, -v),
+            FaceId.NegativeY => new SurfaceKey(u, -intervals, v),
+            FaceId.PositiveZ => new SurfaceKey(u, v, intervals),
+            FaceId.NegativeZ => new SurfaceKey(-u, v, -intervals),
             _ => throw new ArgumentOutOfRangeException(nameof(face)),
         };
     }
@@ -642,7 +661,7 @@ internal static class Asset {
         }
     }
 
-    private static AssetData ReadCore(Stream source, long assetStart) {
+    private static SphereData ReadCore(Stream source, long assetStart) {
         using var reader = new BinaryReader(source, System.Text.Encoding.UTF8, leaveOpen: true);
         if (reader.ReadUInt32() != Magic) {
             throw new InvalidDataException("The stream is not a terrain LOD asset.");
@@ -680,9 +699,9 @@ internal static class Asset {
         var storedFaceCount = reader.ReadInt32();
         var storedChunkCount = reader.ReadInt32();
         var occluderRadius = reader.ReadSingle();
-        var expectedChunkCount = checked(AssetData.FaceCount * GetChunkCount(settings.MaximumLod));
+        var expectedChunkCount = checked(SphereData.FaceCount * GetChunkCount(settings.MaximumLod));
         if (storedFinestResolution != settings.FinestResolution
-            || storedFaceCount != AssetData.FaceCount
+            || storedFaceCount != SphereData.FaceCount
             || storedChunkCount != expectedChunkCount
             || !float.IsFinite(occluderRadius)
             || occluderRadius <= 0.0f) {
@@ -711,17 +730,120 @@ internal static class Asset {
             throw new InvalidDataException("The terrain LOD reference geometry checksum does not match its contents.");
         }
 
-        var data = new AssetData(
+        var data = CreateSphereData(settings, occluderRadius, faceElevations, chunks);
+        ValidateLoadedData(data);
+        source.Position = checked(assetStart + GetAssetLength(sections.Values));
+        return data;
+    }
+
+    private static SphereData CreateSphereData(
+        in Geometry settings,
+        float occluderRadius,
+        short[][] elevations,
+        ChunkData[][] chunks
+    ) {
+        var faces = new FaceData[SphereData.FaceCount];
+        for (var index = 0; index < faces.Length; index++) {
+            faces[index] = new FaceData(
+                settings.FinestResolution,
+                settings.ElevationQuantizationStep,
+                elevations[index],
+                chunks[index]
+            );
+        }
+
+        return new SphereData(
             settings.ReferenceRadius,
             settings.ChunkResolution,
             settings.MaximumLod,
-            settings.ElevationQuantizationStep,
             occluderRadius,
-            faceElevations,
-            chunks
+            faces
         );
-        source.Position = checked(assetStart + GetAssetLength(sections.Values));
-        return data;
+    }
+
+    private static void ValidateLoadedData(SphereData data) {
+        if (data.Faces.Length != SphereData.FaceCount) {
+            throw new InvalidDataException("The terrain LOD asset must contain six faces.");
+        }
+
+        if (!float.IsFinite(data.OccluderRadius) || data.OccluderRadius <= 0.0f) {
+            throw new InvalidDataException("The terrain LOD asset has an invalid occluder radius.");
+        }
+
+        var expectedElevations = checked(data.FinestResolution * data.FinestResolution);
+        var expectedChunks = GetChunkCount(data.MaximumLod);
+        for (var faceIndex = 0; faceIndex < SphereData.FaceCount; faceIndex++) {
+            var face = data.Faces[faceIndex];
+            if (face is null
+                || face.Resolution != data.FinestResolution
+                || face.QuantizedElevations.Length != expectedElevations) {
+                throw new InvalidDataException("A terrain LOD asset face has an invalid elevation count.");
+            }
+
+            if (face.Chunks is null || face.Chunks.Length != expectedChunks) {
+                throw new InvalidDataException("A terrain LOD asset face has an invalid chunk count.");
+            }
+
+            ValidateLoadedChunks(data.MaximumLod, data.OccluderRadius, face.Chunks);
+        }
+    }
+
+    private static void ValidateLoadedChunks(
+        int maximumLod,
+        float occluderRadius,
+        ChunkData[] chunks
+    ) {
+        var firstId = 0u;
+        var chunksAtLevel = 1u;
+        for (var level = 0; level <= maximumLod; level++) {
+            var endId = checked(firstId + chunksAtLevel);
+            for (var id = firstId; id < endId; id++) {
+                var chunk = chunks[checked((int)id)];
+                if (!IsFinite(chunk.CenterDirection)
+                    || !float.IsFinite(chunk.AngularRadius)
+                    || !float.IsFinite(chunk.MinimumRadius)
+                    || !float.IsFinite(chunk.MaximumRadius)
+                    || !IsFinite(chunk.BoundingSphere.Center)
+                    || !float.IsFinite(chunk.BoundingSphere.Radius)
+                    || !float.IsFinite(chunk.HorizonPointRadius)
+                    || !float.IsFinite(chunk.GeometricError)) {
+                    throw new InvalidDataException("The terrain LOD asset contains non-finite chunk metadata.");
+                }
+
+                if (chunk.AngularRadius < 0.0f
+                    || chunk.MinimumRadius <= 0.0f
+                    || chunk.MinimumRadius > chunk.MaximumRadius
+                    || chunk.BoundingSphere.Radius < 0.0f
+                    || chunk.HorizonPointRadius < 0.0f
+                    || chunk.GeometricError < 0.0f
+                    || occluderRadius > chunk.MinimumRadius) {
+                    throw new InvalidDataException("The terrain LOD asset contains invalid chunk bounds.");
+                }
+
+                if (level == maximumLod) {
+                    if (chunk.GeometricError != 0.0f) {
+                        throw new InvalidDataException("A highest-LOD chunk has non-zero geometric error.");
+                    }
+
+                    continue;
+                }
+
+                for (var childIndex = 0; childIndex < 4; childIndex++) {
+                    var childId = Chunk.GetChildId(id, (ChunkQuadrant)childIndex);
+                    var child = chunks[checked((int)childId)];
+                    if (chunk.GeometricError < child.GeometricError) {
+                        throw new InvalidDataException("A parent chunk has less geometric error than one of its children.");
+                    }
+                }
+            }
+
+            firstId = endId;
+            chunksAtLevel = checked(chunksAtLevel * 4);
+        }
+    }
+
+    private static bool IsFinite(in Vector3 value) {
+        return float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
     }
 
     private static Dictionary<Section, SectionDescriptor> ReadSectionTable(
@@ -758,7 +880,7 @@ internal static class Asset {
         }
 
         var expectedHeightLength = checked(
-            (long)AssetData.FaceCount
+            (long)SphereData.FaceCount
             * settings.FinestResolution
             * settings.FinestResolution
             * sizeof(short)
@@ -792,7 +914,7 @@ internal static class Asset {
     ) {
         source.Position = checked(assetStart + section.Offset);
         var samplesPerFace = checked(settings.FinestResolution * settings.FinestResolution);
-        var faces = new short[AssetData.FaceCount][];
+        var faces = new short[SphereData.FaceCount][];
         for (var faceIndex = 0; faceIndex < faces.Length; faceIndex++) {
             var elevations = new short[samplesPerFace];
             faces[faceIndex] = elevations;
@@ -819,7 +941,7 @@ internal static class Asset {
     ) {
         source.Position = checked(assetStart + section.Offset);
         var chunkCount = GetChunkCount(maximumLod);
-        var faces = new ChunkData[AssetData.FaceCount][];
+        var faces = new ChunkData[SphereData.FaceCount][];
         for (var faceIndex = 0; faceIndex < faces.Length; faceIndex++) {
             var chunks = new ChunkData[chunkCount];
             faces[faceIndex] = chunks;
@@ -858,10 +980,13 @@ internal static class Asset {
         return hash;
     }
 
-    private static byte[] CalculateReferenceGeometryHash(AssetData data) {
-        using var hash = CreateReferenceGeometryHash(Geometry.From(data));
-        foreach (var elevations in data.Elevations) {
-            hash.AppendData(MemoryMarshal.AsBytes(elevations.AsSpan()));
+    private static byte[] CalculateReferenceGeometryHash(
+        in Geometry settings,
+        SphereData data
+    ) {
+        using var hash = CreateReferenceGeometryHash(settings);
+        foreach (var face in data.Faces) {
+            hash.AppendData(MemoryMarshal.AsBytes(face.QuantizedElevations));
         }
 
         return hash.GetHashAndReset();
@@ -920,7 +1045,7 @@ internal static class Asset {
     ) {
         if (!float.IsFinite(referenceRadius) || referenceRadius <= 0.0f
             || chunkResolution < 2
-            || maximumLod is < 0 or > 14
+            || maximumLod is < 0 or > Chunk.MaximumLevel
             || !float.IsFinite(elevationQuantizationStep)
             || elevationQuantizationStep <= 0.0f) {
             throw new ArgumentOutOfRangeException(nameof(referenceRadius));
@@ -972,14 +1097,5 @@ internal static class Asset {
         public int FinestIntervals => checked((ChunkResolution - 1) * (1 << MaximumLod));
 
         public int FinestResolution => checked(FinestIntervals + 1);
-
-        public static Geometry From(AssetData data) {
-            return new Geometry(
-                data.ReferenceRadius,
-                data.ChunkResolution,
-                data.MaximumLod,
-                data.ElevationQuantizationStep
-            );
-        }
     }
 }

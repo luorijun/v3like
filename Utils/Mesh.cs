@@ -3,43 +3,14 @@ using Microsoft.Xna.Framework;
 
 namespace monogame.Utils;
 
-internal sealed class MeshData {
-    private readonly Vector3[] _positions;
-
-    internal MeshData(int resolution, Vector3[] positions) {
-        Resolution = resolution;
-        _positions = positions;
-    }
-
-    public int Resolution { get; }
-
-    public ReadOnlySpan<Vector3> Positions => _positions;
-}
-
 internal static class Mesh {
-    public static MeshData CreatePlane(int resolution) {
-        ValidateResolution(resolution);
-
-        var intervals = resolution - 1;
-        var scale = 1.0f / intervals;
-        var positions = new Vector3[checked(resolution * resolution)];
-        for (var y = 0; y < resolution; y++) {
-            var v = checked(y * 2 - intervals);
-            for (var x = 0; x < resolution; x++) {
-                var u = checked(x * 2 - intervals);
-                positions[y * resolution + x] = new Vector3(u * scale, 0.0f, -v * scale);
-            }
-        }
-
-        return new MeshData(resolution, positions);
-    }
-
-    public static MeshData CreateSphere(
+    public static TVertex[] CreateGrid<TVertex>(
         int resolution,
         Vector2 position,
         float size,
-        in Matrix orientation
-    ) {
+        Func<int, int, Vector2, TVertex> createVertex
+    ) where TVertex : struct {
+        ArgumentNullException.ThrowIfNull(createVertex);
         ValidateResolution(resolution);
         if (!float.IsFinite(position.X) || !float.IsFinite(position.Y)) {
             throw new ArgumentOutOfRangeException(nameof(position));
@@ -49,31 +20,25 @@ internal static class Mesh {
             throw new ArgumentOutOfRangeException(nameof(size));
         }
 
-        if (position.X < -1.0f || position.Y < -1.0f
-            || position.X + size > 1.0f
-            || position.Y + size > 1.0f) {
-            throw new ArgumentOutOfRangeException(nameof(position));
-        }
-
         var intervals = resolution - 1;
-        var startU = position.X * intervals;
-        var startV = position.Y * intervals;
-        var positions = new Vector3[checked(resolution * resolution)];
+        var step = size / intervals;
+        var vertices = new TVertex[checked(resolution * resolution)];
         for (var y = 0; y < resolution; y++) {
-            var v = startV + y * size;
             for (var x = 0; x < resolution; x++) {
-                var u = startU + x * size;
-                var spherePosition = Vector3.Normalize(new Vector3(u, intervals, -v));
-                positions[y * resolution + x] = Vector3.TransformNormal(spherePosition, orientation);
+                var point = new Vector2(
+                    position.X + x * step,
+                    position.Y + y * step
+                );
+                vertices[y * resolution + x] = createVertex(x, y, point);
             }
         }
 
-        return new MeshData(resolution, positions);
+        return vertices;
     }
 
-    public static Vector3 GetSpherePosition(float u, float v, in Matrix orientation) {
-        var position = Vector3.Normalize(new Vector3(u, 1.0f, -v));
-        return Vector3.TransformNormal(position, orientation);
+    public static Vector3 GetSphereDirection(in Vector2 point, in Matrix orientation) {
+        var direction = Vector3.Normalize(new Vector3(point.X, 1.0f, -point.Y));
+        return Vector3.TransformNormal(direction, orientation);
     }
 
     public static ushort[] CreateTriangleIndices(int resolution) {
@@ -105,8 +70,6 @@ internal static class Mesh {
     }
 
     private static void ValidateResolution(int resolution) {
-        if (resolution < 2) {
-            throw new ArgumentOutOfRangeException(nameof(resolution));
-        }
+        ArgumentOutOfRangeException.ThrowIfLessThan(resolution, 2);
     }
 }

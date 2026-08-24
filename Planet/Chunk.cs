@@ -5,32 +5,46 @@ using monogame.Utils;
 
 namespace monogame.Planet;
 
-internal readonly record struct ChunkId {
-    public ChunkId(CubeFace face, int level, int x, int y) {
-        var chunksPerAxis = level is >= 0 and <= 30 ? 1 << level : 0;
-        if (!Enum.IsDefined(face)) {
-            throw new ArgumentOutOfRangeException(nameof(face));
-        }
+internal enum ChunkQuadrant : byte {
+    LowerLeft,
+    LowerRight,
+    UpperLeft,
+    UpperRight,
+}
 
-        if (level < 0 || level > 30) {
-            throw new ArgumentOutOfRangeException(nameof(level));
-        }
+internal sealed class Chunk : IDisposable {
+    internal const int MaximumLevel = 14;
 
-        if ((uint)x >= (uint)chunksPerAxis) {
-            throw new ArgumentOutOfRangeException(nameof(x));
-        }
+    private readonly Face _face;
+    private readonly ChunkData _data;
+    private Chunk[] _children;
+    private VertexBuffer _vertexBuffer;
 
-        if ((uint)y >= (uint)chunksPerAxis) {
-            throw new ArgumentOutOfRangeException(nameof(y));
-        }
+    internal Chunk(Face face, in ChunkData data)
+        : this(face, 0, 0, 0, 0, data) {
+    }
 
-        Face = face;
+    internal Chunk(Chunk parent, ChunkQuadrant quadrant, uint id, in ChunkData data)
+        : this(
+            parent._face,
+            id,
+            parent.Level + 1,
+            checked(parent.X * 2 + ((int)quadrant & 1)),
+            checked(parent.Y * 2 + (((int)quadrant >> 1) & 1)),
+            data
+        ) {
+    }
+
+    private Chunk(Face face, uint id, int level, int x, int y, in ChunkData data) {
+        _face = face;
+        _data = data;
+        Id = id;
         Level = level;
         X = x;
         Y = y;
     }
 
-    public CubeFace Face { get; }
+    public uint Id { get; }
 
     public int Level { get; }
 
@@ -38,109 +52,50 @@ internal readonly record struct ChunkId {
 
     public int Y { get; }
 
-    public ChunkId Child(int x, int y) {
-        if ((uint)x > 1) {
-            throw new ArgumentOutOfRangeException(nameof(x));
+
+    internal bool Update(in View view) {
+        if (IsFullyBehindHorizon(view)) {
+            ReleaseChildren();
+            return false;
         }
 
-        if ((uint)y > 1) {
-            throw new ArgumentOutOfRangeException(nameof(y));
+        if (IsOutsideFrustum(view)) {
+            ReleaseChildren();
+            return false;
         }
 
-        return new ChunkId(Face, Level + 1, X * 2 + x, Y * 2 + y);
-    }
-}
-
-internal sealed class Chunk : IDisposable {
-    private readonly Face _face;
-    private VertexBuffer _vertexBuffer;
-
-    internal Chunk(Face face, in ChunkId id, in ChunkData data) {
-        _face = face;
-        Id = id;
-        CenterDirection = data.CenterDirection;
-        AngularRadius = data.AngularRadius;
-        MinimumRadius = data.MinimumRadius;
-        MaximumRadius = data.MaximumRadius;
-        BoundingSphere = data.BoundingSphere;
-        HorizonPointRadius = data.HorizonPointRadius;
-        GeometricError = data.GeometricError;
-    }
-
-    public ChunkId Id { get; }
-
-    public Vector3 CenterDirection { get; }
-
-    public float AngularRadius { get; }
-
-    public float MinimumRadius { get; }
-
-    public float MaximumRadius { get; }
-
-    public BoundingSphere BoundingSphere { get; }
-
-    public float HorizonPointRadius { get; }
-
-    public float GeometricError { get; }
-
-    public MeshData CreateMesh() {
-        var sphere = _face.Sphere;
-        var chunksPerAxis = 1 << Id.Level;
-        var size = 2.0f / chunksPerAxis;
-        var position = new Vector2(-1.0f + Id.X * size, -1.0f + Id.Y * size);
-        var directions = Mesh.CreateSphere(
-            sphere.ChunkResolution,
-            position,
-            size,
-            _face.Orientation
-        );
-        var directionPositions = directions.Positions;
-        var positions = new Vector3[directionPositions.Length];
-        var sampleScale = 1 << (sphere.MaximumLod - Id.Level);
-        var cellsPerChunk = sphere.ChunkResolution - 1;
-        var startX = Id.X * cellsPerChunk * sampleScale;
-        var startY = Id.Y * cellsPerChunk * sampleScale;
-
-        for (var y = 0; y < sphere.ChunkResolution; y++) {
-            var sampleY = startY + y * sampleScale;
-            for (var x = 0; x < sphere.ChunkResolution; x++) {
-                var index = y * sphere.ChunkResolution + x;
-                var sampleX = startX + x * sampleScale;
-                var radius = sphere.ReferenceRadius + _face.GetElevationUnchecked(sampleX, sampleY);
-                positions[index] = directionPositions[index] * radius;
-            }
+        if (IsAtMaximumLod()) {
+            ReleaseChildren();
+            return true;
         }
 
-        return new MeshData(sphere.ChunkResolution, positions);
-    }
-
-    internal void Select(Sphere.Selection selection) {
-        if (IsFullyBehindHorizon(selection)
-            || selection.View.Frustum.Contains(BoundingSphere) == ContainmentType.Disjoint) {
-            return;
+        if (IsWithinSplitThreshold(view)) {
+            ReleaseChildren();
+            return true;
         }
 
-        if (Id.Level == selection.MaximumLod) {
-            selection.Add(this);
-            return;
-        }
-
-        if (Id.Level < selection.MinimumLod) {
-            SelectChildren(selection);
-            return;
-        }
-
-        var distance = CalculateDistance(selection);
-        var screenSpaceError = GeometricError * selection.View.FocalLength / distance;
-        if (screenSpaceError <= selection.SplitThreshold) {
-            selection.Add(this);
-            return;
-        }
-
-        SelectChildren(selection);
+        return UpdateChildren(view);
     }
 
     internal void Draw() {
+        if (_children is not null) {
+            foreach (var child in _children) {
+                child?.Draw();
+            }
+
+            return;
+        }
+
+        DrawSelf();
+    }
+
+    public void Dispose() {
+        ReleaseChildren();
+        _vertexBuffer?.Dispose();
+        _vertexBuffer = null;
+    }
+
+    private void DrawSelf() {
         EnsureVertexBuffer();
         var sphere = _face.Sphere;
         sphere.GraphicsDevice.SetVertexBuffer(_vertexBuffer);
@@ -152,94 +107,156 @@ internal sealed class Chunk : IDisposable {
         );
     }
 
-    public void Dispose() {
-        _vertexBuffer?.Dispose();
-        _vertexBuffer = null;
-    }
-
     private void EnsureVertexBuffer() {
         if (_vertexBuffer is not null) {
             return;
         }
 
-        var mesh = CreateMesh();
-        var positions = mesh.Positions;
-        var vertices = new VertexPositionColor[positions.Length];
-        for (var index = 0; index < vertices.Length; index++) {
-            vertices[index] = new VertexPositionColor(positions[index], new Color(82, 142, 96));
-        }
+        var sphere = _face.Sphere;
+        var chunksPerAxis = 1 << Level;
+        var size = 2.0f / chunksPerAxis;
+        var position = new Vector2(-1.0f + X * size, -1.0f + Y * size);
+        var sampleScale = 1 << (sphere.MaximumLod - Level);
+        var cellsPerChunk = sphere.ChunkResolution - 1;
+        var startX = X * cellsPerChunk * sampleScale;
+        var startY = Y * cellsPerChunk * sampleScale;
+        var orientation = _face.Orientation;
+        var vertices = Mesh.CreateGrid(
+            sphere.ChunkResolution,
+            position,
+            size,
+            (x, y, point) => {
+                var direction = Mesh.GetSphereDirection(point, orientation);
+                var sampleX = startX + x * sampleScale;
+                var sampleY = startY + y * sampleScale;
+                var radius = sphere.ReferenceRadius + _face.GetElevation(sampleX, sampleY);
+                return new VertexPosition(direction * radius);
+            }
+        );
 
         _vertexBuffer = new VertexBuffer(
-            _face.Sphere.GraphicsDevice,
-            VertexPositionColor.VertexDeclaration,
+            sphere.GraphicsDevice,
+            VertexPosition.VertexDeclaration,
             vertices.Length,
             BufferUsage.WriteOnly
         );
         _vertexBuffer.SetData(vertices);
     }
 
-    private void SelectChildren(Sphere.Selection selection) {
-        _face.GetChunk(Id.Child(0, 0)).Select(selection);
-        _face.GetChunk(Id.Child(1, 0)).Select(selection);
-        _face.GetChunk(Id.Child(0, 1)).Select(selection);
-        _face.GetChunk(Id.Child(1, 1)).Select(selection);
+    private bool UpdateChildren(in View view) {
+        _children ??= new Chunk[4];
+        var hasVisibleChild = false;
+
+        for (var index = 0; index < _children.Length; index++) {
+            var child = _children[index]
+                ?? _face.CreateChild(this, (ChunkQuadrant)index);
+            if (child.Update(view)) {
+                _children[index] = child;
+                hasVisibleChild = true;
+            }
+            else {
+                child.Dispose();
+                _children[index] = null;
+            }
+        }
+
+        if (!hasVisibleChild) {
+            _children = null;
+        }
+
+        return hasVisibleChild;
     }
 
-    private bool IsFullyBehindHorizon(Sphere.Selection selection) {
-        if (HorizonPointRadius <= 0.0f) {
+    private void ReleaseChildren() {
+        if (_children is null) {
+            return;
+        }
+
+        foreach (var child in _children) {
+            child?.Dispose();
+        }
+
+        _children = null;
+    }
+
+    private bool IsFullyBehindHorizon(in View view) {
+        if (_data.HorizonPointRadius <= 0.0f) {
             return false;
         }
 
-        var occluderRadius = selection.OccluderRadius;
+        var occluderRadius = _face.Sphere.OccluderRadius;
         var occluderRadiusSquared = (double)occluderRadius * occluderRadius;
-        if (selection.View.CameraLengthSquared <= occluderRadiusSquared) {
+        if (view.CameraLengthSquared <= occluderRadiusSquared) {
             return false;
         }
 
-        var pointX = CenterDirection.X * (double)HorizonPointRadius;
-        var pointY = CenterDirection.Y * (double)HorizonPointRadius;
-        var pointZ = CenterDirection.Z * (double)HorizonPointRadius;
-        var vectorX = pointX - selection.View.CameraPosition.X;
-        var vectorY = pointY - selection.View.CameraPosition.Y;
-        var vectorZ = pointZ - selection.View.CameraPosition.Z;
+        var pointX = _data.CenterDirection.X * (double)_data.HorizonPointRadius;
+        var pointY = _data.CenterDirection.Y * (double)_data.HorizonPointRadius;
+        var pointZ = _data.CenterDirection.Z * (double)_data.HorizonPointRadius;
+        var vectorX = pointX - view.CameraPosition.X;
+        var vectorY = pointY - view.CameraPosition.Y;
+        var vectorZ = pointZ - view.CameraPosition.Z;
         var vectorLengthSquared = vectorX * vectorX + vectorY * vectorY + vectorZ * vectorZ;
         if (vectorLengthSquared <= 0.0) {
             return false;
         }
 
         var projection = -(
-            selection.View.CameraPosition.X * vectorX
-            + selection.View.CameraPosition.Y * vectorY
-            + selection.View.CameraPosition.Z * vectorZ
+            view.CameraPosition.X * vectorX
+            + view.CameraPosition.Y * vectorY
+            + view.CameraPosition.Z * vectorZ
         );
-        var cameraHorizonSquared = selection.View.CameraLengthSquared - occluderRadiusSquared;
+        var cameraHorizonSquared = view.CameraLengthSquared - occluderRadiusSquared;
         return projection > 0.0
             && projection < vectorLengthSquared
             && projection * projection > cameraHorizonSquared * vectorLengthSquared;
     }
 
-    private double CalculateDistance(Sphere.Selection selection) {
-        var centerLength = Math.Sqrt(LengthSquared(CenterDirection));
-        var cosineTheta = (
-            selection.View.CameraPosition.X * CenterDirection.X
-            + selection.View.CameraPosition.Y * CenterDirection.Y
-            + selection.View.CameraPosition.Z * CenterDirection.Z
-        ) / (selection.View.CameraLength * centerLength);
-        var theta = Math.Acos(Math.Clamp(cosineTheta, -1.0, 1.0));
-        var beta = Math.Max(0.0, theta - AngularRadius);
-        var cosineBeta = Math.Cos(beta);
-        var radius = Math.Clamp(
-            selection.View.CameraLength * cosineBeta,
-            MinimumRadius,
-            MaximumRadius
-        );
-        var distanceSquared = selection.View.CameraLengthSquared
-            + radius * radius
-            - 2.0 * selection.View.CameraLength * radius * cosineBeta;
-        return Math.Max(Math.Sqrt(Math.Max(0.0, distanceSquared)), selection.DistanceFloor);
+    private bool IsOutsideFrustum(in View view) {
+        return view.Frustum.Contains(_data.BoundingSphere) == ContainmentType.Disjoint;
     }
 
-    private static double LengthSquared(in Vector3 value) {
-        return (double)value.X * value.X + (double)value.Y * value.Y + (double)value.Z * value.Z;
+    private bool IsAtMaximumLod() {
+        return Level == _face.Sphere.MaximumLod;
+    }
+
+    private bool IsWithinSplitThreshold(in View view) {
+        var centerLength = _data.CenterDirection.Length();
+        var cosineTheta = Vector3.Dot(
+            view.CameraPosition,
+            _data.CenterDirection
+        ) / (view.CameraLength * centerLength);
+        var theta = Math.Acos(Math.Clamp(cosineTheta, -1.0, 1.0));
+        var beta = Math.Max(0.0, theta - _data.AngularRadius);
+        var cosineBeta = Math.Cos(beta);
+        var radius = Math.Clamp(
+            view.CameraLength * cosineBeta,
+            _data.MinimumRadius,
+            _data.MaximumRadius
+        );
+        var distanceSquared = view.CameraLengthSquared
+            + radius * radius
+            - 2.0 * view.CameraLength * radius * cosineBeta;
+
+        var sphere = _face.Sphere;
+        var distance = Math.Max(
+            Math.Sqrt(Math.Max(0.0, distanceSquared)),
+            sphere.DistanceFloor
+        );
+        var screenSpaceError = _data.GeometricError * view.FocalLength / distance;
+        return screenSpaceError <= sphere.SplitThreshold;
+    }
+
+    internal static uint GetId(int level, int x, int y) {
+        var id = 0u;
+        for (var bit = level - 1; bit >= 0; bit--) {
+            var quadrant = ((x >> bit) & 1) | (((y >> bit) & 1) << 1);
+            id = GetChildId(id, (ChunkQuadrant)quadrant);
+        }
+        return id;
+    }
+
+    internal static uint GetChildId(uint parentId, ChunkQuadrant quadrant) {
+        return checked(parentId * 4 + 1 + (uint)quadrant);
     }
 }
