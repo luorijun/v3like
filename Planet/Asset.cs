@@ -90,6 +90,8 @@ internal static class Asset {
     private const int ReferenceGeometryHashSize = 32;
     private const int ProjectionVersion = 1;
     private const int TriangleTopologyVersion = 1;
+    // Increment whenever the meaning or calculation of derived chunk metadata changes.
+    private const int ChunkMetadataVersion = 1;
 
     public static SphereData Read(Stream source) {
         ArgumentNullException.ThrowIfNull(source);
@@ -1006,13 +1008,14 @@ internal static class Asset {
 
     private static IncrementalHash CreateReferenceGeometryHash(in Geometry settings) {
         var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Span<byte> header = stackalloc byte[24];
+        Span<byte> header = stackalloc byte[28];
         BinaryPrimitives.WriteInt32LittleEndian(header[0..4], ProjectionVersion);
         BinaryPrimitives.WriteInt32LittleEndian(header[4..8], TriangleTopologyVersion);
-        BinaryPrimitives.WriteInt32LittleEndian(header[8..12], BitConverter.SingleToInt32Bits(settings.ReferenceRadius));
-        BinaryPrimitives.WriteInt32LittleEndian(header[12..16], settings.ChunkResolution);
-        BinaryPrimitives.WriteInt32LittleEndian(header[16..20], settings.MaximumLod);
-        BinaryPrimitives.WriteInt32LittleEndian(header[20..24], BitConverter.SingleToInt32Bits(settings.ElevationQuantizationStep));
+        BinaryPrimitives.WriteInt32LittleEndian(header[8..12], ChunkMetadataVersion);
+        BinaryPrimitives.WriteInt32LittleEndian(header[12..16], BitConverter.SingleToInt32Bits(settings.ReferenceRadius));
+        BinaryPrimitives.WriteInt32LittleEndian(header[16..20], settings.ChunkResolution);
+        BinaryPrimitives.WriteInt32LittleEndian(header[20..24], settings.MaximumLod);
+        BinaryPrimitives.WriteInt32LittleEndian(header[24..28], BitConverter.SingleToInt32Bits(settings.ElevationQuantizationStep));
         hash.AppendData(header);
         return hash;
     }
