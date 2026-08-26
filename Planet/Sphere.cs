@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using monogame;
@@ -20,6 +21,9 @@ internal sealed class Sphere : IDisposable {
     private readonly float _splitThreshold;
     private readonly float _mergeThreshold;
     private readonly double _distanceFloor;
+    private SelectionMetrics _selectionMetrics;
+    private DrawMetrics _drawMetrics;
+    private long _selectionRevision;
 
     private Sphere(
         SphereData data,
@@ -96,13 +100,29 @@ internal sealed class Sphere : IDisposable {
 
     internal int TriangleCount => _indexBuffer.IndexCount / 3;
 
+    internal SphereMetrics Metrics => new(_selectionMetrics, _drawMetrics);
+
     public void Update(in View view) {
+        var started = Stopwatch.GetTimestamp();
+        var counters = new SelectionCounters();
         foreach (var face in _faces) {
-            face.Update(view);
+            face.Update(view, ref counters);
         }
+
+        _selectionMetrics = new SelectionMetrics(
+            ++_selectionRevision,
+            Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+            counters.VisitedNodes,
+            counters.ActiveChunks,
+            counters.HorizonRejected,
+            counters.FrustumTests,
+            counters.FrustumRejected
+        );
     }
 
     public void Draw(in View view) {
+        var started = Stopwatch.GetTimestamp();
+        var counters = new DrawCounters();
         GraphicsDevice.RasterizerState = _rasterizerState;
         GraphicsDevice.Indices = _indexBuffer;
         _effect.World = Matrix.Identity;
@@ -116,9 +136,18 @@ internal sealed class Sphere : IDisposable {
         foreach (var pass in _effect.CurrentTechnique.Passes) {
             pass.Apply();
             foreach (var face in _faces) {
-                face.Draw(_cache);
+                face.Draw(_cache, ref counters);
             }
         }
+
+        _drawMetrics = new DrawMetrics(
+            Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+            counters.DrawCalls,
+            counters.CacheMisses,
+            counters.CacheEvictions,
+            counters.MeshBuilds,
+            counters.MeshBuildTimestampTicks * 1000.0 / Stopwatch.Frequency
+        );
     }
 
     public void Dispose() {

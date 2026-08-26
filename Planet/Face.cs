@@ -50,9 +50,9 @@ internal sealed class Face {
         return _data.GetElevationUnchecked(x, y);
     }
 
-    internal void Update(in View view) {
+    internal void Update(in View view, ref SelectionCounters counters) {
         _activeCount = 0;
-        UpdateChunk(0, 0, view);
+        UpdateChunk(0, 0, view, ref counters);
     }
 
     internal void TouchCachedChunks(Cache cache) {
@@ -61,25 +61,40 @@ internal sealed class Face {
         }
     }
 
-    internal void Draw(Cache cache) {
+    internal void Draw(Cache cache, ref DrawCounters counters) {
         for (var index = 0; index < _activeCount; index++) {
             var id = _activeIds[index];
             var key = GetCacheKey(id);
-            var chunk = cache.Get(key);
+            var chunk = cache.Get(key, ref counters);
             if (chunk is null) {
                 chunk = new Chunk(this, id);
-                cache.Add(key, chunk);
+                if (cache.Add(key, chunk)) {
+                    counters.CacheEvictions++;
+                }
             }
 
-            chunk.Draw();
+            chunk.Draw(ref counters);
         }
     }
 
-    private void UpdateChunk(uint id, int level, in View view) {
+    private void UpdateChunk(
+        uint id,
+        int level,
+        in View view,
+        ref SelectionCounters counters
+    ) {
+        counters.VisitedNodes++;
         var chunkIndex = checked((int)id);
         ref readonly var data = ref _data.Chunks[chunkIndex];
 
-        if (Chunk.IsFullyBehindHorizon(data, Sphere, view) || Chunk.IsOutsideFrustum(data, view)) {
+        if (Chunk.IsFullyBehindHorizon(data, Sphere, view)) {
+            counters.HorizonRejected++;
+            return;
+        }
+
+        counters.FrustumTests++;
+        if (Chunk.IsOutsideFrustum(data, view)) {
+            counters.FrustumRejected++;
             return;
         }
 
@@ -89,12 +104,18 @@ internal sealed class Face {
         if (Chunk.IsAtMaximumLod(level, Sphere.MaximumLod) || Chunk.IsWithinThreshold(data, Sphere, view, threshold)) {
             _splitStates[chunkIndex] = false;
             _activeIds[_activeCount++] = id;
+            counters.ActiveChunks++;
             return;
         }
 
         _splitStates[chunkIndex] = true;
         for (var index = 0; index < 4; index++) {
-            UpdateChunk(Chunk.GetChildId(id, (ChunkQuadrant)index), level + 1, view);
+            UpdateChunk(
+                Chunk.GetChildId(id, (ChunkQuadrant)index),
+                level + 1,
+                view,
+                ref counters
+            );
         }
     }
 

@@ -9,6 +9,7 @@ public sealed class GameApp : Game {
     private readonly GraphicsDeviceManager _graphics;
     private readonly OrbitCamera _camera = new();
     private Sphere _sphere;
+    private PerformanceMonitor _performance;
 
     public GameApp() {
         _graphics = new GraphicsDeviceManager(this) {
@@ -32,6 +33,7 @@ public sealed class GameApp : Game {
             mergeThreshold: 1.2f,
             cacheCapacity: 8192
         );
+        _performance = new PerformanceMonitor();
     }
 
     protected override void Update(GameTime gameTime) {
@@ -50,10 +52,15 @@ public sealed class GameApp : Game {
     protected override void Draw(GameTime gameTime) {
         GraphicsDevice.Clear(new Color(7, 11, 18));
         _sphere.Draw(_camera.View);
+        var title = _performance.Observe(_sphere.Metrics, gameTime);
+        if (title is not null) {
+            Window.Title = title;
+        }
         base.Draw(gameTime);
     }
 
     protected override void UnloadContent() {
+        _performance.Dispose();
         _sphere.Dispose();
         base.UnloadContent();
     }

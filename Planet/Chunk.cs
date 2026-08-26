@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using monogame.Utils;
@@ -47,8 +48,8 @@ internal sealed class Chunk : IDisposable {
 
     public int Y { get; }
 
-    internal void Draw() {
-        EnsureVertexBuffer();
+    internal void Draw(ref DrawCounters counters) {
+        EnsureVertexBuffer(ref counters);
         var sphere = _face.Sphere;
         sphere.GraphicsDevice.SetVertexBuffer(_vertexBuffer);
         sphere.GraphicsDevice.DrawIndexedPrimitives(
@@ -57,6 +58,7 @@ internal sealed class Chunk : IDisposable {
             0,
             sphere.TriangleCount
         );
+        counters.DrawCalls++;
     }
 
     public void Dispose() {
@@ -64,11 +66,12 @@ internal sealed class Chunk : IDisposable {
         _vertexBuffer = null;
     }
 
-    private void EnsureVertexBuffer() {
+    private void EnsureVertexBuffer(ref DrawCounters counters) {
         if (_vertexBuffer is not null) {
             return;
         }
 
+        var started = Stopwatch.GetTimestamp();
         var sphere = _face.Sphere;
         var chunksPerAxis = 1 << Level;
         var size = 2.0f / chunksPerAxis;
@@ -98,6 +101,8 @@ internal sealed class Chunk : IDisposable {
             BufferUsage.WriteOnly
         );
         _vertexBuffer.SetData(vertices);
+        counters.MeshBuilds++;
+        counters.MeshBuildTimestampTicks += Stopwatch.GetTimestamp() - started;
     }
 
     internal static bool IsFullyBehindHorizon(

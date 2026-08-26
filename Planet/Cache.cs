@@ -24,9 +24,10 @@ internal sealed class Cache : IDisposable {
 
     internal int Capacity { get; }
 
-    internal Chunk Get(int key) {
+    internal Chunk Get(int key, ref DrawCounters counters) {
         ref var entry = ref _entries[key];
         if (entry.Chunk is null) {
+            counters.CacheMisses++;
             return null;
         }
 
@@ -40,13 +41,14 @@ internal sealed class Cache : IDisposable {
         }
     }
 
-    internal void Add(int key, Chunk chunk) {
+    internal bool Add(int key, Chunk chunk) {
         ArgumentNullException.ThrowIfNull(chunk);
         if (_entries[key].Chunk is not null) {
             throw new InvalidOperationException("The cache key is already in use.");
         }
 
-        if (_count == Capacity) {
+        var evicted = _count == Capacity;
+        if (evicted) {
             EvictLeastRecentlyUsed();
         }
 
@@ -63,6 +65,7 @@ internal sealed class Cache : IDisposable {
 
         _mostRecentlyUsed = key;
         _count++;
+        return evicted;
     }
 
     public void Dispose() {
