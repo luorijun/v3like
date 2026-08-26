@@ -21,7 +21,19 @@ internal sealed class Chunk : IDisposable {
     internal Chunk(Face face, uint id) {
         _face = face;
         Id = id;
-        GetCoordinates(id, out var level, out var x, out var y);
+
+        var level = 0;
+        var x = 0;
+        var y = 0;
+        while (id > 0) {
+            var encoded = id - 1;
+            var quadrant = encoded & 3;
+            x |= checked((int)(quadrant & 1) << level);
+            y |= checked((int)((quadrant >> 1) & 1) << level);
+            id = encoded >> 2;
+            level++;
+        }
+
         Level = level;
         X = x;
         Y = y;
@@ -133,10 +145,11 @@ internal sealed class Chunk : IDisposable {
         return level == maximumLod;
     }
 
-    internal static bool IsWithinSplitThreshold(
+    internal static bool IsWithinThreshold(
         in ChunkData data,
         Sphere sphere,
-        in View view
+        in View view,
+        float threshold
     ) {
         var centerLength = data.CenterDirection.Length();
         var cosineTheta = Vector3.Dot(
@@ -160,7 +173,7 @@ internal sealed class Chunk : IDisposable {
             sphere.DistanceFloor
         );
         var screenSpaceError = data.GeometricError * view.FocalLength / distance;
-        return screenSpaceError <= sphere.SplitThreshold;
+        return screenSpaceError <= threshold;
     }
 
     internal static uint GetId(int level, int x, int y) {
@@ -176,17 +189,4 @@ internal sealed class Chunk : IDisposable {
         return checked(parentId * 4 + 1 + (uint)quadrant);
     }
 
-    private static void GetCoordinates(uint id, out int level, out int x, out int y) {
-        level = 0;
-        x = 0;
-        y = 0;
-        while (id > 0) {
-            var encoded = id - 1;
-            var quadrant = encoded & 3;
-            x |= checked((int)(quadrant & 1) << level);
-            y |= checked((int)((quadrant >> 1) & 1) << level);
-            id = encoded >> 2;
-            level++;
-        }
-    }
 }

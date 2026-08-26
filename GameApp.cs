@@ -29,6 +29,7 @@ public sealed class GameApp : Game {
             data,
             GraphicsDevice,
             splitThreshold: 1.5f,
+            mergeThreshold: 1.2f,
             cacheCapacity: 8192
         );
     }
@@ -39,8 +40,9 @@ public sealed class GameApp : Game {
             Exit();
         }
 
-        _camera.Update(gameTime, GraphicsDevice.Viewport);
-        _sphere.Update(_camera.View);
+        if (_camera.Update(gameTime, GraphicsDevice.Viewport)) {
+            _sphere.Update(_camera.View);
+        }
 
         base.Update(gameTime);
     }

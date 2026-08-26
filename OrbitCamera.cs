@@ -16,10 +16,16 @@ internal sealed class OrbitCamera {
     private float _yaw = 0.75f;
     private float _pitch = 0.35f;
     private float _distance = 2.8f;
+    private int _viewportWidth;
+    private int _viewportHeight;
+    private bool _hasView;
 
     public View View { get; private set; }
 
-    public void Update(GameTime gameTime, Viewport viewport) {
+    public bool Update(GameTime gameTime, Viewport viewport) {
+        var previousYaw = _yaw;
+        var previousPitch = _pitch;
+        var previousDistance = _distance;
         var keyboard = Keyboard.GetState();
         var mouse = Mouse.GetState();
 
@@ -53,6 +59,15 @@ internal sealed class OrbitCamera {
         _pitch = MathHelper.Clamp(_pitch, -1.45f, 1.45f);
         _distance = MathHelper.Clamp(_distance, MinimumDistance, MaximumDistance);
 
+        if (_hasView
+            && _yaw == previousYaw
+            && _pitch == previousPitch
+            && _distance == previousDistance
+            && viewport.Width == _viewportWidth
+            && viewport.Height == _viewportHeight) {
+            return false;
+        }
+
         var horizontalRadius = MathF.Cos(_pitch) * _distance;
         var position = new Vector3(
             MathF.Cos(_yaw) * horizontalRadius,
@@ -76,5 +91,9 @@ internal sealed class OrbitCamera {
             viewport.Height,
             viewMatrix * projectionMatrix
         );
+        _viewportWidth = viewport.Width;
+        _viewportHeight = viewport.Height;
+        _hasView = true;
+        return true;
     }
 }

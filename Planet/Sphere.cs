@@ -18,18 +18,25 @@ internal sealed class Sphere : IDisposable {
     private readonly IndexBuffer _indexBuffer;
     private readonly RasterizerState _rasterizerState;
     private readonly float _splitThreshold;
+    private readonly float _mergeThreshold;
     private readonly double _distanceFloor;
 
     private Sphere(
         SphereData data,
         GraphicsDevice graphicsDevice,
         float splitThreshold,
+        float mergeThreshold,
         int cacheCapacity
     ) {
         ArgumentNullException.ThrowIfNull(data);
         ArgumentNullException.ThrowIfNull(graphicsDevice);
         if (!float.IsFinite(splitThreshold) || splitThreshold <= 0.0f) {
             throw new ArgumentOutOfRangeException(nameof(splitThreshold));
+        }
+        if (!float.IsFinite(mergeThreshold)
+            || mergeThreshold <= 0.0f
+            || mergeThreshold >= splitThreshold) {
+            throw new ArgumentOutOfRangeException(nameof(mergeThreshold));
         }
 
         _data = data;
@@ -47,6 +54,7 @@ internal sealed class Sphere : IDisposable {
         }
 
         _splitThreshold = splitThreshold;
+        _mergeThreshold = mergeThreshold;
         _distanceFloor = Math.Max(ReferenceRadius * RelativeDistanceFloor, double.Epsilon);
 
         GraphicsDevice = graphicsDevice;
@@ -82,12 +90,13 @@ internal sealed class Sphere : IDisposable {
 
     internal float SplitThreshold => _splitThreshold;
 
+    internal float MergeThreshold => _mergeThreshold;
+
     internal double DistanceFloor => _distanceFloor;
 
     internal int TriangleCount => _indexBuffer.IndexCount / 3;
 
     public void Update(in View view) {
-        view.EnsureValid();
         foreach (var face in _faces) {
             face.Update(view);
         }
@@ -123,9 +132,10 @@ internal sealed class Sphere : IDisposable {
         SphereData data,
         GraphicsDevice graphicsDevice,
         float splitThreshold,
+        float mergeThreshold,
         int cacheCapacity
     ) {
-        return new Sphere(data, graphicsDevice, splitThreshold, cacheCapacity);
+        return new Sphere(data, graphicsDevice, splitThreshold, mergeThreshold, cacheCapacity);
     }
 
 }

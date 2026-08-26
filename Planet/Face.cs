@@ -24,6 +24,7 @@ internal sealed class Face {
 
     private readonly FaceData _data;
     private readonly uint[] _activeIds;
+    private readonly bool[] _splitStates;
     private int _activeCount;
 
     internal Face(Sphere sphere, FaceId id, FaceData data) {
@@ -36,6 +37,7 @@ internal sealed class Face {
         Id = id;
         _data = data;
         _activeIds = new uint[data.Chunks.Length];
+        _splitStates = new bool[data.Chunks.Length];
     }
 
     public FaceId Id { get; }
@@ -74,17 +76,23 @@ internal sealed class Face {
     }
 
     private void UpdateChunk(uint id, int level, in View view) {
-        ref readonly var data = ref _data.Chunks[checked((int)id)];
+        var chunkIndex = checked((int)id);
+        ref readonly var data = ref _data.Chunks[chunkIndex];
 
         if (Chunk.IsFullyBehindHorizon(data, Sphere, view) || Chunk.IsOutsideFrustum(data, view)) {
             return;
         }
 
-        if (Chunk.IsAtMaximumLod(level, Sphere.MaximumLod) || Chunk.IsWithinSplitThreshold(data, Sphere, view)) {
+        var threshold = _splitStates[chunkIndex]
+            ? Sphere.MergeThreshold
+            : Sphere.SplitThreshold;
+        if (Chunk.IsAtMaximumLod(level, Sphere.MaximumLod) || Chunk.IsWithinThreshold(data, Sphere, view, threshold)) {
+            _splitStates[chunkIndex] = false;
             _activeIds[_activeCount++] = id;
             return;
         }
 
+        _splitStates[chunkIndex] = true;
         for (var index = 0; index < 4; index++) {
             UpdateChunk(Chunk.GetChildId(id, (ChunkQuadrant)index), level + 1, view);
         }
