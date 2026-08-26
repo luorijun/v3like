@@ -16,29 +16,12 @@ internal sealed class Chunk : IDisposable {
     internal const int MaximumLevel = 14;
 
     private readonly Face _face;
-    private readonly ChunkData _data;
-    private Chunk[] _children;
     private VertexBuffer _vertexBuffer;
 
-    internal Chunk(Face face, in ChunkData data)
-        : this(face, 0, 0, 0, 0, data) {
-    }
-
-    internal Chunk(Chunk parent, ChunkQuadrant quadrant, uint id, in ChunkData data)
-        : this(
-            parent._face,
-            id,
-            parent.Level + 1,
-            checked(parent.X * 2 + ((int)quadrant & 1)),
-            checked(parent.Y * 2 + (((int)quadrant >> 1) & 1)),
-            data
-        ) {
-    }
-
-    private Chunk(Face face, uint id, int level, int x, int y, in ChunkData data) {
+    internal Chunk(Face face, uint id) {
         _face = face;
-        _data = data;
         Id = id;
+        GetCoordinates(id, out var level, out var x, out var y);
         Level = level;
         X = x;
         Y = y;
@@ -52,50 +35,7 @@ internal sealed class Chunk : IDisposable {
 
     public int Y { get; }
 
-
-    internal bool Update(in View view) {
-        if (IsFullyBehindHorizon(view)) {
-            ReleaseChildren();
-            return false;
-        }
-
-        if (IsOutsideFrustum(view)) {
-            ReleaseChildren();
-            return false;
-        }
-
-        if (IsAtMaximumLod()) {
-            ReleaseChildren();
-            return true;
-        }
-
-        if (IsWithinSplitThreshold(view)) {
-            ReleaseChildren();
-            return true;
-        }
-
-        return UpdateChildren(view);
-    }
-
     internal void Draw() {
-        if (_children is not null) {
-            foreach (var child in _children) {
-                child?.Draw();
-            }
-
-            return;
-        }
-
-        DrawSelf();
-    }
-
-    public void Dispose() {
-        ReleaseChildren();
-        _vertexBuffer?.Dispose();
-        _vertexBuffer = null;
-    }
-
-    private void DrawSelf() {
         EnsureVertexBuffer();
         var sphere = _face.Sphere;
         sphere.GraphicsDevice.SetVertexBuffer(_vertexBuffer);
@@ -105,6 +45,11 @@ internal sealed class Chunk : IDisposable {
             0,
             sphere.TriangleCount
         );
+    }
+
+    public void Dispose() {
+        _vertexBuffer?.Dispose();
+        _vertexBuffer = null;
     }
 
     private void EnsureVertexBuffer() {
@@ -143,56 +88,24 @@ internal sealed class Chunk : IDisposable {
         _vertexBuffer.SetData(vertices);
     }
 
-    private bool UpdateChildren(in View view) {
-        _children ??= new Chunk[4];
-        var hasVisibleChild = false;
-
-        for (var index = 0; index < _children.Length; index++) {
-            var child = _children[index]
-                ?? _face.CreateChild(this, (ChunkQuadrant)index);
-            if (child.Update(view)) {
-                _children[index] = child;
-                hasVisibleChild = true;
-            }
-            else {
-                child.Dispose();
-                _children[index] = null;
-            }
-        }
-
-        if (!hasVisibleChild) {
-            _children = null;
-        }
-
-        return hasVisibleChild;
-    }
-
-    private void ReleaseChildren() {
-        if (_children is null) {
-            return;
-        }
-
-        foreach (var child in _children) {
-            child?.Dispose();
-        }
-
-        _children = null;
-    }
-
-    private bool IsFullyBehindHorizon(in View view) {
-        if (_data.HorizonPointRadius <= 0.0f) {
+    internal static bool IsFullyBehindHorizon(
+        in ChunkData data,
+        Sphere sphere,
+        in View view
+    ) {
+        if (data.HorizonPointRadius <= 0.0f) {
             return false;
         }
 
-        var occluderRadius = _face.Sphere.OccluderRadius;
+        var occluderRadius = sphere.OccluderRadius;
         var occluderRadiusSquared = (double)occluderRadius * occluderRadius;
         if (view.CameraLengthSquared <= occluderRadiusSquared) {
             return false;
         }
 
-        var pointX = _data.CenterDirection.X * (double)_data.HorizonPointRadius;
-        var pointY = _data.CenterDirection.Y * (double)_data.HorizonPointRadius;
-        var pointZ = _data.CenterDirection.Z * (double)_data.HorizonPointRadius;
+        var pointX = data.CenterDirection.X * (double)data.HorizonPointRadius;
+        var pointY = data.CenterDirection.Y * (double)data.HorizonPointRadius;
+        var pointZ = data.CenterDirection.Z * (double)data.HorizonPointRadius;
         var vectorX = pointX - view.CameraPosition.X;
         var vectorY = pointY - view.CameraPosition.Y;
         var vectorZ = pointZ - view.CameraPosition.Z;
@@ -212,38 +125,41 @@ internal sealed class Chunk : IDisposable {
             && projection * projection > cameraHorizonSquared * vectorLengthSquared;
     }
 
-    private bool IsOutsideFrustum(in View view) {
-        return view.Frustum.Contains(_data.BoundingSphere) == ContainmentType.Disjoint;
+    internal static bool IsOutsideFrustum(in ChunkData data, in View view) {
+        return view.Frustum.Contains(data.BoundingSphere) == ContainmentType.Disjoint;
     }
 
-    private bool IsAtMaximumLod() {
-        return Level == _face.Sphere.MaximumLod;
+    internal static bool IsAtMaximumLod(int level, int maximumLod) {
+        return level == maximumLod;
     }
 
-    private bool IsWithinSplitThreshold(in View view) {
-        var centerLength = _data.CenterDirection.Length();
+    internal static bool IsWithinSplitThreshold(
+        in ChunkData data,
+        Sphere sphere,
+        in View view
+    ) {
+        var centerLength = data.CenterDirection.Length();
         var cosineTheta = Vector3.Dot(
             view.CameraPosition,
-            _data.CenterDirection
+            data.CenterDirection
         ) / (view.CameraLength * centerLength);
         var theta = Math.Acos(Math.Clamp(cosineTheta, -1.0, 1.0));
-        var beta = Math.Max(0.0, theta - _data.AngularRadius);
+        var beta = Math.Max(0.0, theta - data.AngularRadius);
         var cosineBeta = Math.Cos(beta);
         var radius = Math.Clamp(
             view.CameraLength * cosineBeta,
-            _data.MinimumRadius,
-            _data.MaximumRadius
+            data.MinimumRadius,
+            data.MaximumRadius
         );
         var distanceSquared = view.CameraLengthSquared
             + radius * radius
             - 2.0 * view.CameraLength * radius * cosineBeta;
 
-        var sphere = _face.Sphere;
         var distance = Math.Max(
             Math.Sqrt(Math.Max(0.0, distanceSquared)),
             sphere.DistanceFloor
         );
-        var screenSpaceError = _data.GeometricError * view.FocalLength / distance;
+        var screenSpaceError = data.GeometricError * view.FocalLength / distance;
         return screenSpaceError <= sphere.SplitThreshold;
     }
 
@@ -258,5 +174,19 @@ internal sealed class Chunk : IDisposable {
 
     internal static uint GetChildId(uint parentId, ChunkQuadrant quadrant) {
         return checked(parentId * 4 + 1 + (uint)quadrant);
+    }
+
+    private static void GetCoordinates(uint id, out int level, out int x, out int y) {
+        level = 0;
+        x = 0;
+        y = 0;
+        while (id > 0) {
+            var encoded = id - 1;
+            var quadrant = encoded & 3;
+            x |= checked((int)(quadrant & 1) << level);
+            y |= checked((int)((quadrant >> 1) & 1) << level);
+            id = encoded >> 2;
+            level++;
+        }
     }
 }

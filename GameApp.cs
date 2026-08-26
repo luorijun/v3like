@@ -28,7 +28,8 @@ public sealed class GameApp : Game {
         _sphere = Sphere.Create(
             data,
             GraphicsDevice,
-            splitThreshold: 1.5f
+            splitThreshold: 1.5f,
+            cacheCapacity: 8192
         );
     }
 

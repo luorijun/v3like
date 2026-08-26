@@ -12,7 +12,7 @@ internal enum FaceId : byte {
     NegativeZ,
 }
 
-internal sealed class Face : IDisposable {
+internal sealed class Face {
     private static readonly Matrix[] s_orientations = [
         Matrix.CreateWorld(Vector3.Zero, Vector3.Up, Vector3.Right),
         Matrix.CreateWorld(Vector3.Zero, Vector3.Up, Vector3.Left),
@@ -23,13 +23,10 @@ internal sealed class Face : IDisposable {
     ];
 
     private readonly FaceData _data;
-    private bool _rootVisible;
+    private readonly uint[] _activeIds;
+    private int _activeCount;
 
-    internal Face(
-        Sphere sphere,
-        FaceId id,
-        FaceData data
-    ) {
+    internal Face(Sphere sphere, FaceId id, FaceData data) {
         ArgumentNullException.ThrowIfNull(sphere);
         if (!Enum.IsDefined(id)) {
             throw new ArgumentOutOfRangeException(nameof(id));
@@ -38,12 +35,10 @@ internal sealed class Face : IDisposable {
         Sphere = sphere;
         Id = id;
         _data = data;
-        Root = new Chunk(this, data.Chunks[0]);
+        _activeIds = new uint[data.Chunks.Length];
     }
 
     public FaceId Id { get; }
-
-    public Chunk Root { get; }
 
     internal Sphere Sphere { get; }
 
@@ -53,23 +48,50 @@ internal sealed class Face : IDisposable {
         return _data.GetElevationUnchecked(x, y);
     }
 
-    internal Chunk CreateChild(Chunk parent, ChunkQuadrant quadrant) {
-        var id = Chunk.GetChildId(parent.Id, quadrant);
-        return new Chunk(parent, quadrant, id, _data.Chunks[checked((int)id)]);
-    }
-
     internal void Update(in View view) {
-        _rootVisible = Root.Update(view);
+        _activeCount = 0;
+        UpdateChunk(0, 0, view);
     }
 
-    internal void Draw() {
-        if (_rootVisible) {
-            Root.Draw();
+    internal void TouchCachedChunks(Cache cache) {
+        for (var index = 0; index < _activeCount; index++) {
+            cache.Touch(GetCacheKey(_activeIds[index]));
         }
     }
 
-    public void Dispose() {
-        Root.Dispose();
+    internal void Draw(Cache cache) {
+        for (var index = 0; index < _activeCount; index++) {
+            var id = _activeIds[index];
+            var key = GetCacheKey(id);
+            var chunk = cache.Get(key);
+            if (chunk is null) {
+                chunk = new Chunk(this, id);
+                cache.Add(key, chunk);
+            }
+
+            chunk.Draw();
+        }
+    }
+
+    private void UpdateChunk(uint id, int level, in View view) {
+        ref readonly var data = ref _data.Chunks[checked((int)id)];
+
+        if (Chunk.IsFullyBehindHorizon(data, Sphere, view) || Chunk.IsOutsideFrustum(data, view)) {
+            return;
+        }
+
+        if (Chunk.IsAtMaximumLod(level, Sphere.MaximumLod) || Chunk.IsWithinSplitThreshold(data, Sphere, view)) {
+            _activeIds[_activeCount++] = id;
+            return;
+        }
+
+        for (var index = 0; index < 4; index++) {
+            UpdateChunk(Chunk.GetChildId(id, (ChunkQuadrant)index), level + 1, view);
+        }
+    }
+
+    private int GetCacheKey(uint id) {
+        return checked((int)Id * _data.Chunks.Length + (int)id);
     }
 
     internal static Matrix GetOrientation(FaceId face) {

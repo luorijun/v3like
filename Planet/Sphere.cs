@@ -13,6 +13,7 @@ internal sealed class Sphere : IDisposable {
 
     private readonly SphereData _data;
     private readonly Face[] _faces;
+    private readonly Cache _cache;
     private readonly BasicEffect _effect;
     private readonly IndexBuffer _indexBuffer;
     private readonly RasterizerState _rasterizerState;
@@ -22,7 +23,8 @@ internal sealed class Sphere : IDisposable {
     private Sphere(
         SphereData data,
         GraphicsDevice graphicsDevice,
-        float splitThreshold
+        float splitThreshold,
+        int cacheCapacity
     ) {
         ArgumentNullException.ThrowIfNull(data);
         ArgumentNullException.ThrowIfNull(graphicsDevice);
@@ -31,6 +33,10 @@ internal sealed class Sphere : IDisposable {
         }
 
         _data = data;
+        _cache = new Cache(
+            checked(FaceCount * data.Faces[0].Chunks.Length),
+            cacheCapacity
+        );
         _faces = new Face[FaceCount];
         for (var index = 0; index < _faces.Length; index++) {
             _faces[index] = new Face(
@@ -94,19 +100,20 @@ internal sealed class Sphere : IDisposable {
         _effect.View = Matrix.Identity;
         _effect.Projection = view.ViewProjection;
 
+        foreach (var face in _faces) {
+            face.TouchCachedChunks(_cache);
+        }
+
         foreach (var pass in _effect.CurrentTechnique.Passes) {
             pass.Apply();
             foreach (var face in _faces) {
-                face.Draw();
+                face.Draw(_cache);
             }
         }
     }
 
     public void Dispose() {
-        foreach (var face in _faces) {
-            face.Dispose();
-        }
-
+        _cache.Dispose();
         _rasterizerState.Dispose();
         _indexBuffer.Dispose();
         _effect.Dispose();
@@ -115,9 +122,10 @@ internal sealed class Sphere : IDisposable {
     public static Sphere Create(
         SphereData data,
         GraphicsDevice graphicsDevice,
-        float splitThreshold
+        float splitThreshold,
+        int cacheCapacity
     ) {
-        return new Sphere(data, graphicsDevice, splitThreshold);
+        return new Sphere(data, graphicsDevice, splitThreshold, cacheCapacity);
     }
 
 }
