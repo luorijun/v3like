@@ -53,7 +53,14 @@ internal static class Mesh {
     }
 
     public static Vector3 GetSphereDirection(in Vector2 point, in Matrix orientation) {
-        var direction = Vector3.Normalize(new Vector3(point.X, 1.0f, -point.Y));
+        const float faceHalfAngle = MathF.PI * 0.25f;
+        var x = MathF.Abs(point.X) == 1.0f
+            ? point.X
+            : MathF.Tan(point.X * faceHalfAngle);
+        var z = MathF.Abs(point.Y) == 1.0f
+            ? point.Y
+            : MathF.Tan(point.Y * faceHalfAngle);
+        var direction = Vector3.Normalize(new Vector3(x, 1.0f, -z));
         return Vector3.TransformNormal(direction, orientation);
     }
 

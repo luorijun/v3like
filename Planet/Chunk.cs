@@ -94,7 +94,7 @@ internal sealed class Chunk : IDisposable {
                 var direction = Mesh.GetSphereDirection(point, orientation);
                 var sampleX = startX + x * sampleScale;
                 var sampleY = startY + y * sampleScale;
-                var radius = sphere.ReferenceRadius + _face.GetElevation(sampleX, sampleY);
+                var radius = 1.0f + _face.GetElevation(sampleX, sampleY);
                 return new VertexPositionColor(direction * radius, color);
             }
         );

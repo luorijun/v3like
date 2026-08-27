@@ -51,10 +51,9 @@ internal static class AssetBuilderCommand {
             )) {
                 Asset.Write(
                     destination,
-                    PlanetAssetRecipe.ReferenceRadius,
                     PlanetAssetRecipe.ChunkResolution,
                     PlanetAssetRecipe.MaximumLod,
-                    PlanetAssetRecipe.ElevationQuantizationStep,
+                    PlanetAssetRecipe.MaximumElevation,
                     PlanetAssetRecipe.CreateElevationSource()
                 );
                 destination.Flush(flushToDisk: true);
@@ -121,13 +120,11 @@ internal static class AssetBuilderCommand {
 
 internal static class PlanetAssetRecipe {
     internal const string OutputPath = "Content/sphere.asset";
-    internal const float ReferenceRadius = 1.0f;
-    internal const int ChunkResolution = 17;
-    internal const int MaximumLod = 5;
-    internal const float ElevationQuantizationStep = 0.00001f;
-    private const float MaximumAbsoluteElevation = 0.0015f;
+    internal const int ChunkResolution = 33;
+    internal const int MaximumLod = 8;
+    internal const float MaximumElevation = 0.0015f;
 
     internal static IReferenceElevationSource CreateElevationSource() {
-        return new MultiScaleReferenceElevationSource(MaximumAbsoluteElevation);
+        return new MultiScaleReferenceElevationSource();
     }
 }

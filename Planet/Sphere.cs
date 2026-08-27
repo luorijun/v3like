@@ -72,7 +72,7 @@ internal sealed class Sphere : IDisposable {
 
         _splitThreshold = splitThreshold;
         _mergeThreshold = mergeThreshold;
-        _distanceFloor = Math.Max(ReferenceRadius * RelativeDistanceFloor, double.Epsilon);
+        _distanceFloor = Math.Max(RelativeDistanceFloor, double.Epsilon);
 
         GraphicsDevice = graphicsDevice;
         var indices = Mesh.CreateTriangleIndices(ChunkResolution);
@@ -114,8 +114,6 @@ internal sealed class Sphere : IDisposable {
     }
 
     internal GraphicsDevice GraphicsDevice { get; }
-
-    public float ReferenceRadius => _data.ReferenceRadius;
 
     public int ChunkResolution => _data.ChunkResolution;
 
@@ -278,9 +276,8 @@ internal sealed class Sphere : IDisposable {
     }
 
     private static VertexPositionColor[] CreateGuideLineVertices(SphereData data) {
-        var radius = GetMaximumRadius(data)
-            + data.ReferenceRadius * GuideLineSurfaceOffset;
-        var axisHalfLength = data.ReferenceRadius * RotationAxisHalfLength;
+        var radius = GetMaximumRadius(data) + GuideLineSurfaceOffset;
+        var axisHalfLength = RotationAxisHalfLength;
 
         return [
             .. CreateLatitudeLine(radius, 0.0f, Color.Gold),
@@ -291,7 +288,7 @@ internal sealed class Sphere : IDisposable {
     }
 
     private static float GetMaximumRadius(SphereData data) {
-        var maximumRadius = data.ReferenceRadius;
+        var maximumRadius = 1.0f;
         foreach (var face in data.Faces) {
             maximumRadius = MathF.Max(maximumRadius, face.Chunks[0].MaximumRadius);
         }
