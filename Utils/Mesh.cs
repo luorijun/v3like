@@ -4,6 +4,22 @@ using Microsoft.Xna.Framework;
 namespace monogame.Utils;
 
 internal static class Mesh {
+    public static TVertex[] CreateLineList<TVertex>(
+        int segmentCount,
+        Func<float, TVertex> createVertex
+    ) where TVertex : struct {
+        ArgumentNullException.ThrowIfNull(createVertex);
+        ArgumentOutOfRangeException.ThrowIfLessThan(segmentCount, 1);
+
+        var vertices = new TVertex[checked(segmentCount * 2)];
+        for (var segment = 0; segment < segmentCount; segment++) {
+            vertices[segment * 2] = createVertex((float)segment / segmentCount);
+            vertices[segment * 2 + 1] = createVertex((float)(segment + 1) / segmentCount);
+        }
+
+        return vertices;
+    }
+
     public static TVertex[] CreateGrid<TVertex>(
         int resolution,
         Vector2 position,

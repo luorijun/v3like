@@ -16,6 +16,10 @@ internal enum ChunkQuadrant : byte {
 internal sealed class Chunk : IDisposable {
     internal const int MaximumLevel = 14;
 
+    private const int LodColorCount = 6;
+    private const float LodColorSaturation = 0.72f;
+    private const float LodColorValue = 0.9f;
+
     private readonly Face _face;
     private VertexBuffer _vertexBuffer;
 
@@ -81,6 +85,7 @@ internal sealed class Chunk : IDisposable {
         var startX = X * cellsPerChunk * sampleScale;
         var startY = Y * cellsPerChunk * sampleScale;
         var orientation = _face.Orientation;
+        var color = CreateLodColor(Level);
         var vertices = Mesh.CreateGrid(
             sphere.ChunkResolution,
             position,
@@ -90,19 +95,33 @@ internal sealed class Chunk : IDisposable {
                 var sampleX = startX + x * sampleScale;
                 var sampleY = startY + y * sampleScale;
                 var radius = sphere.ReferenceRadius + _face.GetElevation(sampleX, sampleY);
-                return new VertexPosition(direction * radius);
+                return new VertexPositionColor(direction * radius, color);
             }
         );
 
         _vertexBuffer = new VertexBuffer(
             sphere.GraphicsDevice,
-            VertexPosition.VertexDeclaration,
+            VertexPositionColor.VertexDeclaration,
             vertices.Length,
             BufferUsage.WriteOnly
         );
         _vertexBuffer.SetData(vertices);
         counters.MeshBuilds++;
         counters.MeshBuildTimestampTicks += Stopwatch.GetTimestamp() - started;
+    }
+
+    private static Color CreateLodColor(int level) {
+        var maximum = LodColorValue;
+        var minimum = LodColorValue * (1.0f - LodColorSaturation);
+        var color = (level % LodColorCount) switch {
+            0 => new Vector3(maximum, minimum, minimum),
+            1 => new Vector3(maximum, maximum, minimum),
+            2 => new Vector3(minimum, maximum, minimum),
+            3 => new Vector3(minimum, maximum, maximum),
+            4 => new Vector3(minimum, minimum, maximum),
+            _ => new Vector3(maximum, minimum, maximum),
+        };
+        return new Color(color);
     }
 
     internal static bool IsFullyBehindHorizon(

@@ -10,14 +10,27 @@ namespace monogame.Planet;
 internal sealed class Sphere : IDisposable {
     internal const int FaceCount = 6;
 
+    private static readonly Vector3 s_neutralSurfaceColor = new Color(210, 210, 210).ToVector3();
+
     private const double RelativeDistanceFloor = 1e-7;
+    private const int GuideLineSegments = 256;
+    private const int RotationAxisSegments = 64;
+    private const float TropicLatitudeDegrees = 23.44f;
+    private const float GuideLineSurfaceOffset = 0.001f;
+    private const float WireframeDepthBias = -0.00001f;
+    private const float RotationAxisHalfLength = 1.15f;
 
     private readonly SphereData _data;
     private readonly Face[] _faces;
     private readonly Cache _cache;
-    private readonly BasicEffect _effect;
+    private readonly BasicEffect _surfaceEffect;
+    private readonly BasicEffect _wireframeEffect;
+    private readonly BasicEffect _guideLineEffect;
     private readonly IndexBuffer _indexBuffer;
-    private readonly RasterizerState _rasterizerState;
+    private readonly VertexBuffer _guideLineVertexBuffer;
+    private readonly int _guideLinePrimitiveCount;
+    private readonly RasterizerState _solidRasterizerState;
+    private readonly RasterizerState _wireframeRasterizerState;
     private readonly float _splitThreshold;
     private readonly float _mergeThreshold;
     private readonly double _distanceFloor;
@@ -70,15 +83,33 @@ internal sealed class Sphere : IDisposable {
             BufferUsage.WriteOnly
         );
         _indexBuffer.SetData(indices);
-        _effect = new BasicEffect(graphicsDevice) {
-            DiffuseColor = new Color(82, 142, 96).ToVector3(),
-            VertexColorEnabled = false,
+        _surfaceEffect = new BasicEffect(graphicsDevice) {
+            DiffuseColor = Vector3.One,
+            VertexColorEnabled = true,
             LightingEnabled = false,
             TextureEnabled = false,
         };
-        _rasterizerState = new RasterizerState {
+        _wireframeEffect = new BasicEffect(graphicsDevice) {
+            DiffuseColor = Vector3.One,
+            VertexColorEnabled = true,
+            LightingEnabled = false,
+            TextureEnabled = false,
+        };
+        _guideLineEffect = new BasicEffect(graphicsDevice) {
+            VertexColorEnabled = true,
+            LightingEnabled = false,
+            TextureEnabled = false,
+        };
+        _guideLineVertexBuffer = CreateGuideLineVertexBuffer(graphicsDevice, data);
+        _guideLinePrimitiveCount = _guideLineVertexBuffer.VertexCount / 2;
+        _solidRasterizerState = new RasterizerState {
             CullMode = CullMode.CullClockwiseFace,
             FillMode = FillMode.Solid,
+        };
+        _wireframeRasterizerState = new RasterizerState {
+            CullMode = CullMode.CullClockwiseFace,
+            FillMode = FillMode.WireFrame,
+            DepthBias = WireframeDepthBias,
         };
     }
 
@@ -120,24 +151,43 @@ internal sealed class Sphere : IDisposable {
         );
     }
 
-    public void Draw(in View view) {
+    public void Draw(in View view, in PlanetRenderOptions options) {
         var started = Stopwatch.GetTimestamp();
         var counters = new DrawCounters();
-        GraphicsDevice.RasterizerState = _rasterizerState;
-        GraphicsDevice.Indices = _indexBuffer;
-        _effect.World = Matrix.Identity;
-        _effect.View = Matrix.Identity;
-        _effect.Projection = view.ViewProjection;
+        _surfaceEffect.DiffuseColor = options.ShowWireframe
+            ? s_neutralSurfaceColor
+            : Vector3.One;
+        _surfaceEffect.VertexColorEnabled = !options.ShowWireframe;
+        ConfigureEffect(_surfaceEffect, view.ViewProjection);
+        ConfigureEffect(_wireframeEffect, view.ViewProjection);
+        ConfigureEffect(_guideLineEffect, view.ViewProjection);
 
-        foreach (var face in _faces) {
-            face.TouchCachedChunks(_cache);
+        if (options.ShowSurface || options.ShowWireframe) {
+            foreach (var face in _faces) {
+                face.TouchCachedChunks(_cache);
+            }
         }
 
-        foreach (var pass in _effect.CurrentTechnique.Passes) {
-            pass.Apply();
-            foreach (var face in _faces) {
-                face.Draw(_cache, ref counters);
-            }
+        if (options.ShowSurface) {
+            DrawSphereGeometry(
+                _surfaceEffect,
+                DepthStencilState.Default,
+                _solidRasterizerState,
+                ref counters
+            );
+        }
+
+        if (options.ShowWireframe) {
+            DrawSphereGeometry(
+                _wireframeEffect,
+                DepthStencilState.DepthRead,
+                _wireframeRasterizerState,
+                ref counters
+            );
+        }
+
+        if (options.ShowGuideLines) {
+            DrawGuideLines();
         }
 
         _drawMetrics = new DrawMetrics(
@@ -152,9 +202,13 @@ internal sealed class Sphere : IDisposable {
 
     public void Dispose() {
         _cache.Dispose();
-        _rasterizerState.Dispose();
+        _wireframeRasterizerState.Dispose();
+        _solidRasterizerState.Dispose();
+        _guideLineVertexBuffer.Dispose();
         _indexBuffer.Dispose();
-        _effect.Dispose();
+        _guideLineEffect.Dispose();
+        _wireframeEffect.Dispose();
+        _surfaceEffect.Dispose();
     }
 
     public static Sphere Create(
@@ -167,4 +221,121 @@ internal sealed class Sphere : IDisposable {
         return new Sphere(data, graphicsDevice, splitThreshold, mergeThreshold, cacheCapacity);
     }
 
+    private static void ConfigureEffect(BasicEffect effect, in Matrix viewProjection) {
+        effect.World = Matrix.Identity;
+        effect.View = Matrix.Identity;
+        effect.Projection = viewProjection;
+    }
+
+    private void DrawSphereGeometry(
+        BasicEffect effect,
+        DepthStencilState depthStencilState,
+        RasterizerState rasterizerState,
+        ref DrawCounters counters
+    ) {
+        GraphicsDevice.BlendState = BlendState.Opaque;
+        GraphicsDevice.DepthStencilState = depthStencilState;
+        GraphicsDevice.RasterizerState = rasterizerState;
+        GraphicsDevice.Indices = _indexBuffer;
+
+        foreach (var pass in effect.CurrentTechnique.Passes) {
+            pass.Apply();
+            foreach (var face in _faces) {
+                face.Draw(_cache, ref counters);
+            }
+        }
+    }
+
+    private void DrawGuideLines() {
+        GraphicsDevice.BlendState = BlendState.Opaque;
+        GraphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
+        GraphicsDevice.RasterizerState = RasterizerState.CullNone;
+        GraphicsDevice.SetVertexBuffer(_guideLineVertexBuffer);
+
+        foreach (var pass in _guideLineEffect.CurrentTechnique.Passes) {
+            pass.Apply();
+            GraphicsDevice.DrawPrimitives(
+                PrimitiveType.LineList,
+                0,
+                _guideLinePrimitiveCount
+            );
+        }
+    }
+
+    private static VertexBuffer CreateGuideLineVertexBuffer(
+        GraphicsDevice graphicsDevice,
+        SphereData data
+    ) {
+        var vertices = CreateGuideLineVertices(data);
+        var vertexBuffer = new VertexBuffer(
+            graphicsDevice,
+            VertexPositionColor.VertexDeclaration,
+            vertices.Length,
+            BufferUsage.WriteOnly
+        );
+        vertexBuffer.SetData(vertices);
+        return vertexBuffer;
+    }
+
+    private static VertexPositionColor[] CreateGuideLineVertices(SphereData data) {
+        var radius = GetMaximumRadius(data)
+            + data.ReferenceRadius * GuideLineSurfaceOffset;
+        var axisHalfLength = data.ReferenceRadius * RotationAxisHalfLength;
+
+        return [
+            .. CreateLatitudeLine(radius, 0.0f, Color.Gold),
+            .. CreateLatitudeLine(radius, TropicLatitudeDegrees, Color.OrangeRed),
+            .. CreateLatitudeLine(radius, -TropicLatitudeDegrees, Color.OrangeRed),
+            .. CreateRotationAxis(axisHalfLength),
+        ];
+    }
+
+    private static float GetMaximumRadius(SphereData data) {
+        var maximumRadius = data.ReferenceRadius;
+        foreach (var face in data.Faces) {
+            maximumRadius = MathF.Max(maximumRadius, face.Chunks[0].MaximumRadius);
+        }
+
+        return maximumRadius;
+    }
+
+    private static VertexPositionColor[] CreateLatitudeLine(
+        float radius,
+        float latitudeDegrees,
+        Color color
+    ) {
+        var latitude = MathHelper.ToRadians(latitudeDegrees);
+        var y = MathF.Sin(latitude) * radius;
+        var horizontalRadius = MathF.Cos(latitude) * radius;
+
+        return Mesh.CreateLineList(
+            GuideLineSegments,
+            progress => {
+                var longitude = MathHelper.TwoPi * progress;
+                var position = new Vector3(
+                    MathF.Cos(longitude) * horizontalRadius,
+                    y,
+                    MathF.Sin(longitude) * horizontalRadius
+                );
+                return new VertexPositionColor(position, color);
+            }
+        );
+    }
+
+    private static VertexPositionColor[] CreateRotationAxis(float halfLength) {
+        return Mesh.CreateLineList(
+            RotationAxisSegments,
+            progress => new VertexPositionColor(
+                Vector3.UnitY * MathHelper.Lerp(-halfLength, halfLength, progress),
+                Color.Cyan
+            )
+        );
+    }
+
 }
+
+internal readonly record struct PlanetRenderOptions(
+    bool ShowSurface,
+    bool ShowWireframe,
+    bool ShowGuideLines
+);
