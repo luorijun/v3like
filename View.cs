@@ -38,6 +38,13 @@ internal readonly record struct View {
 
     internal BoundingFrustum Frustum { get; }
 
+    internal bool Same(in View other) {
+        return CameraPosition == other.CameraPosition
+            && VerticalFieldOfView == other.VerticalFieldOfView
+            && ViewportHeight == other.ViewportHeight
+            && ViewProjection == other.ViewProjection;
+    }
+
     internal void EnsureValid() {
         if (!IsFinite(CameraPosition) || CameraPosition.LengthSquared() <= 0.0f) {
             throw new ArgumentOutOfRangeException(nameof(CameraPosition));

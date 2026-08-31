@@ -22,7 +22,7 @@ internal sealed class OrbitCamera {
 
     public View View { get; private set; }
 
-    public bool Update(GameTime gameTime, Viewport viewport) {
+    public void Update(GameTime gameTime, Viewport viewport) {
         var previousYaw = _yaw;
         var previousPitch = _pitch;
         var previousDistance = _distance;
@@ -65,7 +65,7 @@ internal sealed class OrbitCamera {
             && _distance == previousDistance
             && viewport.Width == _viewportWidth
             && viewport.Height == _viewportHeight) {
-            return false;
+            return;
         }
 
         var horizontalRadius = MathF.Cos(_pitch) * _distance;
@@ -94,6 +94,5 @@ internal sealed class OrbitCamera {
         _viewportWidth = viewport.Width;
         _viewportHeight = viewport.Height;
         _hasView = true;
-        return true;
     }
 }

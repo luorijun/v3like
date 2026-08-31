@@ -14,6 +14,8 @@ public sealed class GameApp : Game {
     private bool _showSurface = true;
     private bool _showWireframe;
     private bool _showGuideLines;
+    private bool _lockLod;
+    private View? _preLodView;
     private string _performanceTitle = "Cube Sphere Terrain";
 
     public GameApp() {
@@ -59,10 +61,16 @@ public sealed class GameApp : Game {
             _showGuideLines = !_showGuideLines;
         }
 
+        if (WasPressed(keyboard, Keys.F4)) {
+            _lockLod = !_lockLod;
+        }
+
         _previousKeyboardState = keyboard;
 
-        if (_camera.Update(gameTime, GraphicsDevice.Viewport)) {
+        _camera.Update(gameTime, GraphicsDevice.Viewport);
+        if (!_lockLod && (!_preLodView.HasValue || !_preLodView.Value.Same(_camera.View))) {
             _sphere.Update(_camera.View);
+            _preLodView = _camera.View;
         }
 
         base.Update(gameTime);
@@ -81,7 +89,8 @@ public sealed class GameApp : Game {
             _performanceTitle = title;
         }
 
-        Window.Title = $"{_performanceTitle} | F1 surface:{OnOff(_showSurface)} F2 mesh:{OnOff(_showWireframe)} F3 guides:{OnOff(_showGuideLines)}";
+        var lodState = _lockLod ? "frozen" : "running";
+        Window.Title = $"{_performanceTitle} | F1 surface:{OnOff(_showSurface)} F2 mesh:{OnOff(_showWireframe)} F3 guides:{OnOff(_showGuideLines)} F4 lod:{lodState}";
         base.Draw(gameTime);
     }
 
