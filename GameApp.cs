@@ -6,8 +6,7 @@ using monogame.Planet;
 namespace monogame;
 
 public sealed class GameApp : Game {
-    private readonly GraphicsDeviceManager _graphics;
-    private readonly OrbitCamera _camera = new();
+    private OrbitCamera _camera;
     private Sphere _sphere;
     private PerformanceMonitor _performance;
     private KeyboardState _previousKeyboardState = Keyboard.GetState();
@@ -19,7 +18,7 @@ public sealed class GameApp : Game {
     private string _performanceTitle = "Cube Sphere Terrain";
 
     public GameApp() {
-        _graphics = new GraphicsDeviceManager(this) {
+        _ = new GraphicsDeviceManager(this) {
             PreferredBackBufferWidth = 1280,
             PreferredBackBufferHeight = 720,
         };
@@ -43,6 +42,7 @@ public sealed class GameApp : Game {
             // 278 KiB
             cacheCapacity: 2000
         );
+        _camera = new OrbitCamera(_sphere.MaximumRadius);
         _performance = new PerformanceMonitor();
     }
 

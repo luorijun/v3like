@@ -130,6 +130,8 @@ internal sealed class Sphere : IDisposable {
 
     public float OccluderRadius => _data.OccluderRadius;
 
+    public float MaximumRadius => GetMaximumRadius(_data);
+
     internal float SplitThreshold => _splitThreshold;
 
     internal float MergeThreshold => _mergeThreshold;
