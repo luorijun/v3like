@@ -6,6 +6,12 @@ using monogame.Planet;
 namespace monogame;
 
 public sealed class GameApp : Game {
+    private static readonly SphereConfiguration s_sphereConfiguration = new(
+        MeshResolution: 16,
+        TextureResolution: 256,
+        ChunkCacheCapacity: 2000
+    );
+
     private OrbitCamera _camera;
     private Sphere _sphere;
     private PerformanceMonitor _performance;
@@ -13,9 +19,9 @@ public sealed class GameApp : Game {
     private bool _showSurface = true;
     private bool _showWireframe;
     private bool _showGuideLines;
-    private bool _lockLod;
-    private View? _preLodView;
-    private string _performanceTitle = "Cube Sphere Terrain";
+    private bool _selectionFrozen;
+    private View? _previousSelectionView;
+    private string _performanceTitle = "Cube Sphere";
 
     public GameApp() {
         _ = new GraphicsDeviceManager(this) {
@@ -25,25 +31,19 @@ public sealed class GameApp : Game {
 
         IsMouseVisible = true;
         Window.AllowUserResizing = true;
-        Window.Title = "Cube Sphere Terrain";
+        Window.Title = "Cube Sphere";
         Content.RootDirectory = "Content";
     }
 
     protected override void LoadContent() {
         var surfaceEffect = Content.Load<Effect>("Effects/TileSurface");
-        using var stream = TitleContainer.OpenStream("Content/sphere.asset");
-        var data = Asset.Read(stream);
         _sphere = Sphere.Create(
-            data,
+            s_sphereConfiguration,
             GraphicsDevice,
-            surfaceEffect,
-            splitThreshold: 1.5f,
-            mergeThreshold: 1.2f,
-            // 278 KiB
-            cacheCapacity: 2000
+            surfaceEffect
         );
-        _camera = new OrbitCamera(_sphere.MaximumRadius);
-        _performance = new PerformanceMonitor();
+        _camera = new OrbitCamera();
+        _performance = new PerformanceMonitor(GraphicsDevice);
     }
 
     protected override void Update(GameTime gameTime) {
@@ -65,15 +65,20 @@ public sealed class GameApp : Game {
         }
 
         if (WasPressed(keyboard, Keys.F4)) {
-            _lockLod = !_lockLod;
+            _selectionFrozen = !_selectionFrozen;
+            if (!_selectionFrozen) {
+                _previousSelectionView = null;
+            }
         }
 
         _previousKeyboardState = keyboard;
 
         _camera.Update(gameTime, GraphicsDevice.Viewport);
-        if (!_lockLod && (!_preLodView.HasValue || !_preLodView.Value.Same(_camera.View))) {
+        if (!_selectionFrozen
+            && (!_previousSelectionView.HasValue
+                || !_previousSelectionView.Value.Same(_camera.View))) {
             _sphere.Update(_camera.View);
-            _preLodView = _camera.View;
+            _previousSelectionView = _camera.View;
         }
 
         base.Update(gameTime);
@@ -81,19 +86,19 @@ public sealed class GameApp : Game {
 
     protected override void Draw(GameTime gameTime) {
         GraphicsDevice.Clear(new Color(7, 11, 18));
-        var renderOptions = new PlanetRenderOptions(
+        _performance.BeginDraw();
+        _sphere.Draw(_camera.View, new PlanetRenderOptions(
             _showSurface,
             _showWireframe,
             _showGuideLines
-        );
-        _sphere.Draw(_camera.View, renderOptions);
+        ));
         var title = _performance.Observe(_sphere.Metrics, gameTime);
         if (title is not null) {
             _performanceTitle = title;
         }
 
-        var lodState = _lockLod ? "frozen" : "running";
-        Window.Title = $"{_performanceTitle} | F1 surface:{OnOff(_showSurface)} F2 mesh:{OnOff(_showWireframe)} F3 guides:{OnOff(_showGuideLines)} F4 lod:{lodState}";
+        var selectionState = _selectionFrozen ? "frozen" : "running";
+        Window.Title = $"{_performanceTitle} | F1 surface:{OnOff(_showSurface)} F2 wireframe:{OnOff(_showWireframe)} F3 guides:{OnOff(_showGuideLines)} F4 selection:{selectionState}";
         base.Draw(gameTime);
     }
 

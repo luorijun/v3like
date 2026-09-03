@@ -9,33 +9,17 @@ internal sealed class OrbitCamera {
     public const float FieldOfView = MathHelper.PiOver4;
 
     private const float MinimumHeight = 0.0025f;
-    private const float InitialDistance = 2.8f;
-    private const float MaximumDistance = 4.0f;
+    private const float InitialHeight = 1.8f;
+    private const float MaximumHeight = 3.0f;
     private const float RotationPerPixel = 0.005f;
 
     private MouseState _previousMouseState = Mouse.GetState();
-    private readonly float _surfaceRadius;
-    private readonly float _referenceHeight;
-    private readonly float _maximumHeight;
     private float _yaw = 0.75f;
     private float _pitch = 0.35f;
-    private float _height;
+    private float _height = InitialHeight;
     private int _viewportWidth;
     private int _viewportHeight;
     private bool _hasView;
-
-    public OrbitCamera(float surfaceRadius) {
-        if (!float.IsFinite(surfaceRadius)
-            || surfaceRadius <= 0.0f
-            || surfaceRadius + MinimumHeight >= InitialDistance) {
-            throw new ArgumentOutOfRangeException(nameof(surfaceRadius));
-        }
-
-        _surfaceRadius = surfaceRadius;
-        _referenceHeight = InitialDistance - surfaceRadius;
-        _maximumHeight = MaximumDistance - surfaceRadius;
-        _height = _referenceHeight;
-    }
 
     public View View { get; private set; }
 
@@ -49,7 +33,7 @@ internal sealed class OrbitCamera {
         if (keyboard.IsKeyDown(Keys.Home)) {
             _yaw = 0.75f;
             _pitch = 0.35f;
-            _height = _referenceHeight;
+            _height = InitialHeight;
         }
         else {
             var elapsedSeconds = (float)gameTime.ElapsedGameTime.TotalSeconds;
@@ -63,10 +47,10 @@ internal sealed class OrbitCamera {
             }
 
             _height *= MathF.Exp(zoomExponent);
-            _height = MathHelper.Clamp(_height, MinimumHeight, _maximumHeight);
+            _height = MathHelper.Clamp(_height, MinimumHeight, MaximumHeight);
 
             if (mouse.MiddleButton == ButtonState.Pressed && _previousMouseState.MiddleButton == ButtonState.Pressed) {
-                var rotationScale = MathF.Min(_height / _referenceHeight, 1.0f);
+                var rotationScale = MathF.Min(_height / InitialHeight, 1.0f);
                 _yaw += (mouse.X - _previousMouseState.X) * RotationPerPixel * rotationScale;
                 _pitch += (mouse.Y - _previousMouseState.Y) * RotationPerPixel * rotationScale;
             }
@@ -75,7 +59,7 @@ internal sealed class OrbitCamera {
         _previousMouseState = mouse;
         _yaw = MathHelper.WrapAngle(_yaw);
         _pitch = MathHelper.Clamp(_pitch, -1.45f, 1.45f);
-        _height = MathHelper.Clamp(_height, MinimumHeight, _maximumHeight);
+        _height = MathHelper.Clamp(_height, MinimumHeight, MaximumHeight);
 
         if (_hasView
             && _yaw == previousYaw
@@ -86,7 +70,7 @@ internal sealed class OrbitCamera {
             return;
         }
 
-        var distance = _surfaceRadius + _height;
+        var distance = 1.0f + _height;
         var horizontalRadius = MathF.Cos(_pitch) * distance;
         var position = new Vector3(
             MathF.Cos(_yaw) * horizontalRadius,

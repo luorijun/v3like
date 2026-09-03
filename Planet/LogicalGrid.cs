@@ -6,7 +6,6 @@ namespace monogame.Planet;
 internal sealed class LogicalGrid {
     internal const int Frequency = 358;
     internal const int TileCount = 10 * Frequency * Frequency + 2;
-    internal const int IndexTextureResolution = 256;
 
     private const int BaseVertexCount = 12;
     private const int BaseEdgeCount = 30;
@@ -43,18 +42,19 @@ internal sealed class LogicalGrid {
     internal Color[] CreateIndexColors(
         in Matrix faceOrientation,
         in Vector2 chunkPosition,
-        float chunkSize
+        float chunkSize,
+        int textureSampleCount
     ) {
-        var colors = new Color[IndexTextureResolution * IndexTextureResolution];
-        var step = chunkSize / IndexTextureResolution;
+        var colors = new Color[checked(textureSampleCount * textureSampleCount)];
+        var step = chunkSize / (textureSampleCount - 1);
         var previousRowFirstTileId = -1;
 
-        for (var y = 0; y < IndexTextureResolution; y++) {
-            var pointY = chunkPosition.Y + (y + 0.5f) * step;
+        for (var y = 0; y < textureSampleCount; y++) {
+            var pointY = chunkPosition.Y + y * step;
             var tileId = previousRowFirstTileId;
-            for (var x = 0; x < IndexTextureResolution; x++) {
+            for (var x = 0; x < textureSampleCount; x++) {
                 var point = new Vector2(
-                    chunkPosition.X + (x + 0.5f) * step,
+                    chunkPosition.X + x * step,
                     pointY
                 );
                 var direction = Utils.Mesh.GetSphereDirection(point, faceOrientation);
@@ -65,7 +65,7 @@ internal sealed class LogicalGrid {
                     previousRowFirstTileId = tileId;
                 }
 
-                colors[y * IndexTextureResolution + x] = CreateIndexColor(tileId);
+                colors[y * textureSampleCount + x] = CreateIndexColor(tileId);
             }
         }
 

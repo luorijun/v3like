@@ -7,27 +7,19 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 
 namespace monogame.Planet;
 
 internal struct SelectionCounters {
     internal int VisitedNodes;
-    internal int ActiveChunks;
     internal int HorizonRejected;
-    internal int FrustumTests;
     internal int FrustumRejected;
-}
-
-internal struct DrawCounters {
-    internal int DrawCalls;
-    internal int CacheMisses;
-    internal int CacheEvictions;
-    internal int MeshBuilds;
-    internal long MeshBuildTimestampTicks;
 }
 
 internal readonly record struct SelectionMetrics(
     long Revision,
+    int TargetLod,
     double UpdateMilliseconds,
     int VisitedNodes,
     int ActiveChunks,
@@ -36,51 +28,82 @@ internal readonly record struct SelectionMetrics(
     int FrustumRejected
 );
 
-internal readonly record struct DrawMetrics(
-    double CpuMilliseconds,
-    int DrawCalls,
-    int CacheMisses,
-    int CacheEvictions,
-    int MeshBuilds,
-    double MeshBuildMilliseconds
+internal readonly record struct CacheMetrics(
+    long Misses,
+    long Evictions
 );
 
 internal readonly record struct SphereMetrics(
     SelectionMetrics Selection,
-    DrawMetrics Draw
+    CacheMetrics Cache,
+    long PageGenerations,
+    long PageGenerationTimestampTicks
 );
 
 internal sealed class PerformanceMonitor : IDisposable {
     private const double SampleIntervalSeconds = 0.5;
 
+    private readonly GraphicsDevice _graphicsDevice;
     private readonly PerformanceLog _log = new();
+    private long _drawStartedAt;
+    private GraphicsMetrics _drawStartMetrics;
     private double _elapsedSeconds;
     private double _drawMilliseconds;
     private double _maximumDrawMilliseconds;
     private long _drawCalls;
     private int _drawFrames;
-    private int _cacheMisses;
-    private int _cacheEvictions;
-    private int _meshBuilds;
-    private double _meshBuildMilliseconds;
+    private long _cacheMisses;
+    private long _cacheEvictions;
+    private long _pageGenerations;
+    private double _pageGenerationMilliseconds;
+    private long _observedCacheMisses;
+    private long _observedCacheEvictions;
+    private long _observedPageGenerations;
+    private long _observedPageGenerationTimestampTicks;
     private SelectionMetrics _selection;
+
+    internal PerformanceMonitor(GraphicsDevice graphicsDevice) {
+        ArgumentNullException.ThrowIfNull(graphicsDevice);
+        _graphicsDevice = graphicsDevice;
+    }
 
     internal string LogPath => _log.Path;
 
+    internal void BeginDraw() {
+        _drawStartedAt = Stopwatch.GetTimestamp();
+        _drawStartMetrics = _graphicsDevice.Metrics;
+    }
+
     internal string Observe(in SphereMetrics metrics, GameTime gameTime) {
+        var drawMetrics = _graphicsDevice.Metrics - _drawStartMetrics;
+        var drawMilliseconds = Stopwatch.GetElapsedTime(
+            _drawStartedAt
+        ).TotalMilliseconds;
+        var cacheMisses = metrics.Cache.Misses - _observedCacheMisses;
+        var cacheEvictions = metrics.Cache.Evictions - _observedCacheEvictions;
+        var pageGenerations = metrics.PageGenerations - _observedPageGenerations;
+        var pageGenerationTimestampTicks = metrics.PageGenerationTimestampTicks
+            - _observedPageGenerationTimestampTicks;
+
+        _observedCacheMisses = metrics.Cache.Misses;
+        _observedCacheEvictions = metrics.Cache.Evictions;
+        _observedPageGenerations = metrics.PageGenerations;
+        _observedPageGenerationTimestampTicks =
+            metrics.PageGenerationTimestampTicks;
         _selection = metrics.Selection;
         _elapsedSeconds += gameTime.ElapsedGameTime.TotalSeconds;
-        _drawMilliseconds += metrics.Draw.CpuMilliseconds;
+        _drawMilliseconds += drawMilliseconds;
         _maximumDrawMilliseconds = Math.Max(
             _maximumDrawMilliseconds,
-            metrics.Draw.CpuMilliseconds
+            drawMilliseconds
         );
-        _drawCalls += metrics.Draw.DrawCalls;
+        _drawCalls += drawMetrics.DrawCount;
         _drawFrames++;
-        _cacheMisses += metrics.Draw.CacheMisses;
-        _cacheEvictions += metrics.Draw.CacheEvictions;
-        _meshBuilds += metrics.Draw.MeshBuilds;
-        _meshBuildMilliseconds += metrics.Draw.MeshBuildMilliseconds;
+        _cacheMisses += cacheMisses;
+        _cacheEvictions += cacheEvictions;
+        _pageGenerations += pageGenerations;
+        _pageGenerationMilliseconds += pageGenerationTimestampTicks
+            * 1000.0 / Stopwatch.Frequency;
 
         if (_elapsedSeconds < SampleIntervalSeconds) {
             return null;
@@ -96,8 +119,8 @@ internal sealed class PerformanceMonitor : IDisposable {
             drawCallsAverage,
             _cacheMisses,
             _cacheEvictions,
-            _meshBuilds,
-            _meshBuildMilliseconds
+            _pageGenerations,
+            _pageGenerationMilliseconds
         );
         _log.Enqueue(sample);
         ResetInterval();
@@ -116,8 +139,8 @@ internal sealed class PerformanceMonitor : IDisposable {
         _drawFrames = 0;
         _cacheMisses = 0;
         _cacheEvictions = 0;
-        _meshBuilds = 0;
-        _meshBuildMilliseconds = 0.0;
+        _pageGenerations = 0;
+        _pageGenerationMilliseconds = 0.0;
     }
 
     private static string FormatTitle(in PerformanceSample sample, bool hasLogError) {
@@ -125,7 +148,7 @@ internal sealed class PerformanceMonitor : IDisposable {
         var error = hasLogError ? " | LOG ERR" : string.Empty;
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"LOD {selection.UpdateMilliseconds:F3}ms N{selection.VisitedNodes}->{selection.ActiveChunks} H{selection.HorizonRejected} F{selection.FrustumRejected}/{selection.FrustumTests} | Draw {sample.DrawAverageMilliseconds:F3}/{sample.MaximumDrawMilliseconds:F3}ms {sample.DrawCallsAverage:F0} calls | Mesh {sample.MeshBuilds}/{sample.MeshBuildMilliseconds:F3}ms E{sample.CacheEvictions}{error}"
+            $"LOD L{selection.TargetLod} {selection.UpdateMilliseconds:F3}ms N{selection.VisitedNodes}->{selection.ActiveChunks} H{selection.HorizonRejected} F{selection.FrustumRejected}/{selection.FrustumTests} | Draw {sample.DrawAverageMilliseconds:F3}/{sample.MaximumDrawMilliseconds:F3}ms {sample.DrawCallsAverage:F0} calls | Pages {sample.PageGenerations}/{sample.PageGenerationMilliseconds:F3}ms E{sample.CacheEvictions}{error}"
         );
     }
 }
@@ -136,10 +159,10 @@ internal readonly record struct PerformanceSample(
     double DrawAverageMilliseconds,
     double MaximumDrawMilliseconds,
     double DrawCallsAverage,
-    int CacheMisses,
-    int CacheEvictions,
-    int MeshBuilds,
-    double MeshBuildMilliseconds
+    long CacheMisses,
+    long CacheEvictions,
+    long PageGenerations,
+    double PageGenerationMilliseconds
 );
 
 internal sealed class PerformanceLog : IDisposable {
@@ -214,7 +237,7 @@ internal sealed class PerformanceLog : IDisposable {
         var temporaryPath = Path + ".tmp";
         using (var writer = new StreamWriter(temporaryPath, append: false)) {
             writer.WriteLine(
-                "timestamp,lod_revision,lod_update_ms,visited,active,horizon_rejected,frustum_tests,frustum_rejected,draw_cpu_avg_ms,draw_cpu_max_ms,draw_calls_avg,cache_misses,evictions,mesh_builds,mesh_build_ms"
+                "timestamp,lod_revision,target_lod,lod_update_ms,visited,active,horizon_rejected,frustum_tests,frustum_rejected,draw_cpu_avg_ms,draw_cpu_max_ms,draw_calls_avg,cache_misses,evictions,page_generations,page_generation_ms"
             );
             foreach (var sample in samples) {
                 writer.WriteLine(FormatCsv(sample));
@@ -228,7 +251,7 @@ internal sealed class PerformanceLog : IDisposable {
         var selection = sample.Selection;
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"{sample.Timestamp:O},{selection.Revision},{selection.UpdateMilliseconds:F6},{selection.VisitedNodes},{selection.ActiveChunks},{selection.HorizonRejected},{selection.FrustumTests},{selection.FrustumRejected},{sample.DrawAverageMilliseconds:F6},{sample.MaximumDrawMilliseconds:F6},{sample.DrawCallsAverage:F3},{sample.CacheMisses},{sample.CacheEvictions},{sample.MeshBuilds},{sample.MeshBuildMilliseconds:F6}"
+            $"{sample.Timestamp:O},{selection.Revision},{selection.TargetLod},{selection.UpdateMilliseconds:F6},{selection.VisitedNodes},{selection.ActiveChunks},{selection.HorizonRejected},{selection.FrustumTests},{selection.FrustumRejected},{sample.DrawAverageMilliseconds:F6},{sample.MaximumDrawMilliseconds:F6},{sample.DrawCallsAverage:F3},{sample.CacheMisses},{sample.CacheEvictions},{sample.PageGenerations},{sample.PageGenerationMilliseconds:F6}"
         );
     }
 }

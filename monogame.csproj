@@ -17,16 +17,5 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="tools\**\*.cs" />
-    <None Update="Content\sphere.asset" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
-  <Target
-    Name="EnsurePlanetAssetExists"
-    BeforeTargets="Build"
-    Condition="'$(SkipPlanetAssetCheck)' != 'true'"
-  >
-    <Error
-      Condition="!Exists('$(MSBuildProjectDirectory)\Content\sphere.asset')"
-      Text="Planet asset is missing. Run: dotnet run --project tools/AssetBuilder -- planet"
-    />
-  </Target>
 </Project>

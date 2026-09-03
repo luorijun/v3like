@@ -1,122 +1,79 @@
 using System;
+using System.Collections.Generic;
 
 namespace monogame.Planet;
 
-internal sealed class Cache : IDisposable {
-    private const int MissingIndex = -1;
+internal sealed class ChunkCache : IDisposable {
+    private readonly Dictionary<ChunkAddress, Entry> _entries;
+    private readonly LinkedList<ChunkAddress> _useOrder = new();
+    private long _cacheMisses;
+    private long _cacheEvictions;
 
-    private readonly Entry[] _entries;
-    private int _count;
-    private int _mostRecentlyUsed = MissingIndex;
-    private int _leastRecentlyUsed = MissingIndex;
-
-    internal Cache(int keyCount, int capacity) {
-        if (keyCount <= 0) {
-            throw new ArgumentOutOfRangeException(nameof(keyCount));
-        }
+    internal ChunkCache(int capacity) {
         if (capacity <= 0) {
             throw new ArgumentOutOfRangeException(nameof(capacity));
         }
 
-        _entries = new Entry[keyCount];
-        Capacity = Math.Min(capacity, keyCount);
+        Capacity = capacity;
+        _entries = new Dictionary<ChunkAddress, Entry>(capacity);
     }
 
     internal int Capacity { get; }
 
-    internal Chunk Get(int key, ref DrawCounters counters) {
-        ref var entry = ref _entries[key];
-        if (entry.Chunk is null) {
-            counters.CacheMisses++;
+    internal CacheMetrics Metrics => new(_cacheMisses, _cacheEvictions);
+
+    internal Chunk Get(in ChunkAddress address) {
+        if (!_entries.TryGetValue(address, out var entry)) {
+            _cacheMisses++;
             return null;
         }
 
-        MarkMostRecentlyUsed(key);
+        _useOrder.Remove(entry.UseNode);
+        _useOrder.AddFirst(entry.UseNode);
         return entry.Chunk;
     }
 
-    internal void Touch(int key) {
-        if (_entries[key].Chunk is not null) {
-            MarkMostRecentlyUsed(key);
-        }
-    }
-
-    internal bool Add(int key, Chunk chunk) {
-        ArgumentNullException.ThrowIfNull(chunk);
-        if (_entries[key].Chunk is not null) {
-            throw new InvalidOperationException("The cache key is already in use.");
-        }
-
-        var evicted = _count == Capacity;
-        if (evicted) {
-            EvictLeastRecentlyUsed();
-        }
-
-        ref var entry = ref _entries[key];
-        entry.Chunk = chunk;
-        entry.Previous = MissingIndex;
-        entry.Next = _mostRecentlyUsed;
-        if (_mostRecentlyUsed != MissingIndex) {
-            _entries[_mostRecentlyUsed].Previous = key;
-        }
-        else {
-            _leastRecentlyUsed = key;
-        }
-
-        _mostRecentlyUsed = key;
-        _count++;
-        return evicted;
-    }
-
-    public void Dispose() {
-        while (_leastRecentlyUsed != MissingIndex) {
-            EvictLeastRecentlyUsed();
-        }
-    }
-
-    private void MarkMostRecentlyUsed(int key) {
-        if (key == _mostRecentlyUsed) {
+    internal void Touch(in ChunkAddress address) {
+        if (!_entries.TryGetValue(address, out var entry)) {
             return;
         }
 
-        RemoveFromOrder(key);
-        ref var entry = ref _entries[key];
-        entry.Previous = MissingIndex;
-        entry.Next = _mostRecentlyUsed;
-        _entries[_mostRecentlyUsed].Previous = key;
-        _mostRecentlyUsed = key;
+        _useOrder.Remove(entry.UseNode);
+        _useOrder.AddFirst(entry.UseNode);
     }
 
-    private void RemoveFromOrder(int key) {
-        ref var entry = ref _entries[key];
-        if (entry.Previous != MissingIndex) {
-            _entries[entry.Previous].Next = entry.Next;
-        }
-        else {
-            _mostRecentlyUsed = entry.Next;
+    internal void Add(Chunk chunk) {
+        ArgumentNullException.ThrowIfNull(chunk);
+        var address = chunk.Address;
+        if (_entries.ContainsKey(address)) {
+            throw new InvalidOperationException("The chunk is already cached.");
         }
 
-        if (entry.Next != MissingIndex) {
-            _entries[entry.Next].Previous = entry.Previous;
+        var evicted = _entries.Count == Capacity;
+        if (evicted) {
+            _cacheEvictions++;
+            var addressToRemove = _useOrder.Last!.Value;
+            var entryToRemove = _entries[addressToRemove];
+            _useOrder.RemoveLast();
+            _entries.Remove(addressToRemove);
+            entryToRemove.Chunk.Dispose();
         }
-        else {
-            _leastRecentlyUsed = entry.Previous;
-        }
+
+        var node = _useOrder.AddFirst(address);
+        _entries.Add(address, new Entry(chunk, node));
     }
 
-    private void EvictLeastRecentlyUsed() {
-        var key = _leastRecentlyUsed;
-        ref var entry = ref _entries[key];
-        var chunk = entry.Chunk;
-        RemoveFromOrder(key);
-        entry = default;
-        _count--;
-        chunk.Dispose();
+    public void Dispose() {
+        foreach (var entry in _entries.Values) {
+            entry.Chunk.Dispose();
+        }
+
+        _entries.Clear();
+        _useOrder.Clear();
     }
 
-    private struct Entry {
-        internal Chunk Chunk;
-        internal int Previous;
-        internal int Next;
-    }
+    private readonly record struct Entry(
+        Chunk Chunk,
+        LinkedListNode<ChunkAddress> UseNode
+    );
 }
