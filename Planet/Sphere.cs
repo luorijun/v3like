@@ -10,8 +10,6 @@ namespace monogame.Planet;
 internal sealed class Sphere : IDisposable {
     internal const int FaceCount = 6;
 
-    private static readonly Vector3 s_neutralSurfaceColor = new Color(210, 210, 210).ToVector3();
-
     private const double RelativeDistanceFloor = 1e-7;
     private const int GuideLineSegments = 256;
     private const int RotationAxisSegments = 64;
@@ -23,7 +21,10 @@ internal sealed class Sphere : IDisposable {
     private readonly SphereData _data;
     private readonly Face[] _faces;
     private readonly Cache _cache;
-    private readonly BasicEffect _surfaceEffect;
+    private readonly LogicalGrid _logicalGrid;
+    private readonly Effect _surfaceEffect;
+    private readonly EffectParameter _surfaceViewProjectionParameter;
+    private readonly EffectParameter _tileIndexTextureParameter;
     private readonly BasicEffect _wireframeEffect;
     private readonly BasicEffect _guideLineEffect;
     private readonly IndexBuffer _indexBuffer;
@@ -41,12 +42,14 @@ internal sealed class Sphere : IDisposable {
     private Sphere(
         SphereData data,
         GraphicsDevice graphicsDevice,
+        Effect surfaceEffect,
         float splitThreshold,
         float mergeThreshold,
         int cacheCapacity
     ) {
         ArgumentNullException.ThrowIfNull(data);
         ArgumentNullException.ThrowIfNull(graphicsDevice);
+        ArgumentNullException.ThrowIfNull(surfaceEffect);
         if (!float.IsFinite(splitThreshold) || splitThreshold <= 0.0f) {
             throw new ArgumentOutOfRangeException(nameof(splitThreshold));
         }
@@ -57,6 +60,7 @@ internal sealed class Sphere : IDisposable {
         }
 
         _data = data;
+        _logicalGrid = new LogicalGrid();
         _cache = new Cache(
             checked(FaceCount * data.Faces[0].Chunks.Length),
             cacheCapacity
@@ -83,15 +87,18 @@ internal sealed class Sphere : IDisposable {
             BufferUsage.WriteOnly
         );
         _indexBuffer.SetData(indices);
-        _surfaceEffect = new BasicEffect(graphicsDevice) {
-            DiffuseColor = Vector3.One,
-            VertexColorEnabled = true,
-            LightingEnabled = false,
-            TextureEnabled = false,
-        };
+        _surfaceEffect = surfaceEffect.Clone();
+        _surfaceViewProjectionParameter = GetRequiredParameter(
+            _surfaceEffect,
+            "WorldViewProjection"
+        );
+        _tileIndexTextureParameter = GetRequiredParameter(
+            _surfaceEffect,
+            "TileIndexTexture"
+        );
         _wireframeEffect = new BasicEffect(graphicsDevice) {
             DiffuseColor = Vector3.One,
-            VertexColorEnabled = true,
+            VertexColorEnabled = false,
             LightingEnabled = false,
             TextureEnabled = false,
         };
@@ -114,6 +121,8 @@ internal sealed class Sphere : IDisposable {
     }
 
     internal GraphicsDevice GraphicsDevice { get; }
+
+    internal LogicalGrid LogicalGrid => _logicalGrid;
 
     public int ChunkResolution => _data.ChunkResolution;
 
@@ -152,11 +161,7 @@ internal sealed class Sphere : IDisposable {
     public void Draw(in View view, in PlanetRenderOptions options) {
         var started = Stopwatch.GetTimestamp();
         var counters = new DrawCounters();
-        _surfaceEffect.DiffuseColor = options.ShowWireframe
-            ? s_neutralSurfaceColor
-            : Vector3.One;
-        _surfaceEffect.VertexColorEnabled = !options.ShowWireframe;
-        ConfigureEffect(_surfaceEffect, view.ViewProjection);
+        _surfaceViewProjectionParameter.SetValue(view.ViewProjection);
         ConfigureEffect(_wireframeEffect, view.ViewProjection);
         ConfigureEffect(_guideLineEffect, view.ViewProjection);
 
@@ -167,21 +172,11 @@ internal sealed class Sphere : IDisposable {
         }
 
         if (options.ShowSurface) {
-            DrawSphereGeometry(
-                _surfaceEffect,
-                DepthStencilState.Default,
-                _solidRasterizerState,
-                ref counters
-            );
+            DrawSurface(ref counters);
         }
 
         if (options.ShowWireframe) {
-            DrawSphereGeometry(
-                _wireframeEffect,
-                DepthStencilState.DepthRead,
-                _wireframeRasterizerState,
-                ref counters
-            );
+            DrawWireframe(ref counters);
         }
 
         if (options.ShowGuideLines) {
@@ -212,11 +207,19 @@ internal sealed class Sphere : IDisposable {
     public static Sphere Create(
         SphereData data,
         GraphicsDevice graphicsDevice,
+        Effect surfaceEffect,
         float splitThreshold,
         float mergeThreshold,
         int cacheCapacity
     ) {
-        return new Sphere(data, graphicsDevice, splitThreshold, mergeThreshold, cacheCapacity);
+        return new Sphere(
+            data,
+            graphicsDevice,
+            surfaceEffect,
+            splitThreshold,
+            mergeThreshold,
+            cacheCapacity
+        );
     }
 
     private static void ConfigureEffect(BasicEffect effect, in Matrix viewProjection) {
@@ -225,23 +228,39 @@ internal sealed class Sphere : IDisposable {
         effect.Projection = viewProjection;
     }
 
-    private void DrawSphereGeometry(
-        BasicEffect effect,
-        DepthStencilState depthStencilState,
-        RasterizerState rasterizerState,
-        ref DrawCounters counters
-    ) {
+    private void DrawSurface(ref DrawCounters counters) {
         GraphicsDevice.BlendState = BlendState.Opaque;
-        GraphicsDevice.DepthStencilState = depthStencilState;
-        GraphicsDevice.RasterizerState = rasterizerState;
+        GraphicsDevice.DepthStencilState = DepthStencilState.Default;
+        GraphicsDevice.RasterizerState = _solidRasterizerState;
+        GraphicsDevice.SamplerStates[0] = SamplerState.PointClamp;
         GraphicsDevice.Indices = _indexBuffer;
 
-        foreach (var pass in effect.CurrentTechnique.Passes) {
-            pass.Apply();
-            foreach (var face in _faces) {
-                face.Draw(_cache, ref counters);
-            }
+        foreach (var face in _faces) {
+            face.DrawSurface(
+                _cache,
+                _surfaceEffect,
+                _tileIndexTextureParameter,
+                ref counters
+            );
         }
+    }
+
+    private void DrawWireframe(ref DrawCounters counters) {
+        GraphicsDevice.BlendState = BlendState.Opaque;
+        GraphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
+        GraphicsDevice.RasterizerState = _wireframeRasterizerState;
+        GraphicsDevice.Indices = _indexBuffer;
+
+        foreach (var face in _faces) {
+            face.DrawWireframe(_cache, _wireframeEffect, ref counters);
+        }
+    }
+
+    private static EffectParameter GetRequiredParameter(Effect effect, string name) {
+        return effect.Parameters[name]
+            ?? throw new InvalidOperationException(
+                $"The surface effect is missing its {name} parameter."
+            );
     }
 
     private void DrawGuideLines() {

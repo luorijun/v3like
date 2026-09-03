@@ -22,6 +22,7 @@ internal sealed class Chunk : IDisposable {
 
     private readonly Face _face;
     private VertexBuffer _vertexBuffer;
+    private Texture2D _tileIndexTexture;
 
     internal Chunk(Face face, uint id) {
         _face = face;
@@ -52,25 +53,40 @@ internal sealed class Chunk : IDisposable {
 
     public int Y { get; }
 
-    internal void Draw(ref DrawCounters counters) {
-        EnsureVertexBuffer(ref counters);
+    internal void DrawSurface(
+        Effect surfaceEffect,
+        EffectParameter tileIndexTextureParameter,
+        ref DrawCounters counters
+    ) {
+        EnsureResources(ref counters);
         var sphere = _face.Sphere;
         sphere.GraphicsDevice.SetVertexBuffer(_vertexBuffer);
-        sphere.GraphicsDevice.DrawIndexedPrimitives(
-            PrimitiveType.TriangleList,
-            0,
-            0,
-            sphere.TriangleCount
-        );
-        counters.DrawCalls++;
+        tileIndexTextureParameter.SetValue(_tileIndexTexture);
+        foreach (var pass in surfaceEffect.CurrentTechnique.Passes) {
+            pass.Apply();
+            Draw(ref counters);
+        }
+    }
+
+    internal void DrawWireframe(BasicEffect effect, ref DrawCounters counters) {
+        EnsureResources(ref counters);
+        var sphere = _face.Sphere;
+        sphere.GraphicsDevice.SetVertexBuffer(_vertexBuffer);
+        effect.DiffuseColor = CreateLodColor(Level);
+        foreach (var pass in effect.CurrentTechnique.Passes) {
+            pass.Apply();
+            Draw(ref counters);
+        }
     }
 
     public void Dispose() {
+        _tileIndexTexture?.Dispose();
+        _tileIndexTexture = null;
         _vertexBuffer?.Dispose();
         _vertexBuffer = null;
     }
 
-    private void EnsureVertexBuffer(ref DrawCounters counters) {
+    private void EnsureResources(ref DrawCounters counters) {
         if (_vertexBuffer is not null) {
             return;
         }
@@ -80,40 +96,71 @@ internal sealed class Chunk : IDisposable {
         var chunksPerAxis = 1 << Level;
         var size = 2.0f / chunksPerAxis;
         var position = new Vector2(-1.0f + X * size, -1.0f + Y * size);
-        var sampleScale = 1 << (sphere.MaximumLod - Level);
-        var cellsPerChunk = sphere.ChunkResolution - 1;
-        var startX = X * cellsPerChunk * sampleScale;
-        var startY = Y * cellsPerChunk * sampleScale;
         var orientation = _face.Orientation;
-        var color = CreateLodColor(Level);
+        var inverseIntervals = 1.0f / (sphere.ChunkResolution - 1);
         var vertices = Mesh.CreateGrid(
             sphere.ChunkResolution,
             position,
             size,
             (x, y, point) => {
                 var direction = Mesh.GetSphereDirection(point, orientation);
-                var sampleX = startX + x * sampleScale;
-                var sampleY = startY + y * sampleScale;
-                var radius = 1.0f + _face.GetElevation(sampleX, sampleY);
-                return new VertexPositionColor(direction * radius, color);
+                return new VertexPositionTexture(
+                    direction,
+                    new Vector2(x * inverseIntervals, y * inverseIntervals)
+                );
             }
         );
 
-        _vertexBuffer = new VertexBuffer(
+        var vertexBuffer = new VertexBuffer(
             sphere.GraphicsDevice,
-            VertexPositionColor.VertexDeclaration,
+            VertexPositionTexture.VertexDeclaration,
             vertices.Length,
             BufferUsage.WriteOnly
         );
-        _vertexBuffer.SetData(vertices);
+        vertexBuffer.SetData(vertices);
+        Texture2D tileIndexTexture = null;
+        try {
+            var colors = sphere.LogicalGrid.CreateIndexColors(
+                orientation,
+                position,
+                size
+            );
+            tileIndexTexture = new Texture2D(
+                sphere.GraphicsDevice,
+                LogicalGrid.IndexTextureResolution,
+                LogicalGrid.IndexTextureResolution,
+                false,
+                SurfaceFormat.Color
+            );
+            tileIndexTexture.SetData(colors);
+        }
+        catch {
+            tileIndexTexture?.Dispose();
+            vertexBuffer.Dispose();
+            throw;
+        }
+
+        _vertexBuffer = vertexBuffer;
+        _tileIndexTexture = tileIndexTexture;
         counters.MeshBuilds++;
         counters.MeshBuildTimestampTicks += Stopwatch.GetTimestamp() - started;
     }
 
-    private static Color CreateLodColor(int level) {
+    private void Draw(ref DrawCounters counters) {
+        var sphere = _face.Sphere;
+        sphere.GraphicsDevice.DrawIndexedPrimitives(
+            PrimitiveType.TriangleList,
+            0,
+            0,
+            sphere.TriangleCount
+        );
+        counters.DrawCalls++;
+    }
+
+    private static Vector3 CreateLodColor(int level) {
         var maximum = LodColorValue;
         var minimum = LodColorValue * (1.0f - LodColorSaturation);
-        var color = (level % LodColorCount) switch {
+        return (level % LodColorCount) switch {
             0 => new Vector3(maximum, minimum, minimum),
             1 => new Vector3(maximum, maximum, minimum),
             2 => new Vector3(minimum, maximum, minimum),
@@ -121,7 +168,6 @@ internal sealed class Chunk : IDisposable {
             4 => new Vector3(minimum, minimum, maximum),
             _ => new Vector3(maximum, minimum, maximum),
         };
-        return new Color(color);
     }
 
     internal static bool IsFullyBehindHorizon(

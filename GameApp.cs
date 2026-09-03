@@ -31,11 +31,13 @@ public sealed class GameApp : Game {
     }
 
     protected override void LoadContent() {
+        var surfaceEffect = Content.Load<Effect>("Effects/TileSurface");
         using var stream = TitleContainer.OpenStream("Content/sphere.asset");
         var data = Asset.Read(stream);
         _sphere = Sphere.Create(
             data,
             GraphicsDevice,
+            surfaceEffect,
             splitThreshold: 1.5f,
             mergeThreshold: 1.2f,
             // 278 KiB

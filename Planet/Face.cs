@@ -1,5 +1,6 @@
 using System;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 
 namespace monogame.Planet;
 
@@ -61,20 +62,42 @@ internal sealed class Face {
         }
     }
 
-    internal void Draw(Cache cache, ref DrawCounters counters) {
+    internal void DrawSurface(
+        Cache cache,
+        Effect surfaceEffect,
+        EffectParameter tileIndexTextureParameter,
+        ref DrawCounters counters
+    ) {
         for (var index = 0; index < _activeCount; index++) {
-            var id = _activeIds[index];
-            var key = GetCacheKey(id);
-            var chunk = cache.Get(key, ref counters);
-            if (chunk is null) {
-                chunk = new Chunk(this, id);
-                if (cache.Add(key, chunk)) {
-                    counters.CacheEvictions++;
-                }
-            }
-
-            chunk.Draw(ref counters);
+            var chunk = GetChunk(cache, _activeIds[index], ref counters);
+            chunk.DrawSurface(surfaceEffect, tileIndexTextureParameter, ref counters);
         }
+    }
+
+    internal void DrawWireframe(
+        Cache cache,
+        BasicEffect effect,
+        ref DrawCounters counters
+    ) {
+        for (var index = 0; index < _activeCount; index++) {
+            var chunk = GetChunk(cache, _activeIds[index], ref counters);
+            chunk.DrawWireframe(effect, ref counters);
+        }
+    }
+
+    private Chunk GetChunk(Cache cache, uint id, ref DrawCounters counters) {
+        var key = GetCacheKey(id);
+        var chunk = cache.Get(key, ref counters);
+        if (chunk is not null) {
+            return chunk;
+        }
+
+        chunk = new Chunk(this, id);
+        if (cache.Add(key, chunk)) {
+            counters.CacheEvictions++;
+        }
+
+        return chunk;
     }
 
     private void UpdateChunk(
