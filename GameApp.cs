@@ -38,7 +38,8 @@ public sealed class GameApp : Game {
             GraphicsDevice,
             splitThreshold: 1.5f,
             mergeThreshold: 1.2f,
-            cacheCapacity: 8192
+            // 278 KiB
+            cacheCapacity: 2000
         );
         _performance = new PerformanceMonitor();
     }
