@@ -2,6 +2,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
 using monogame.Planet;
+using monogame.Debugging;
 
 namespace monogame;
 
@@ -14,14 +15,7 @@ public sealed class GameApp : Game {
 
     private OrbitCamera _camera;
     private Sphere _sphere;
-    private PerformanceMonitor _performance;
-    private KeyboardState _previousKeyboardState = Keyboard.GetState();
-    private bool _showSurface = true;
-    private bool _showWireframe;
-    private bool _showGuideLines;
-    private bool _selectionFrozen;
-    private View? _previousSelectionView;
-    private string _performanceTitle = "Cube Sphere";
+    private View? _prevCameraView;
 
     public GameApp() {
         _ = new GraphicsDeviceManager(this) {
@@ -31,88 +25,53 @@ public sealed class GameApp : Game {
 
         IsMouseVisible = true;
         Window.AllowUserResizing = true;
-        Window.Title = "Cube Sphere";
+        Window.Title = "Cube Sphere | F5 Debug";
         Content.RootDirectory = "Content";
     }
 
     protected override void LoadContent() {
+        InputManager.Initialize(this);
         var surfaceEffect = Content.Load<Effect>("Effects/TileSurface");
-        _sphere = Sphere.Create(
-            s_sphereConfiguration,
-            GraphicsDevice,
-            surfaceEffect
-        );
+        Debugger.Initialize(this);
+        _sphere = Sphere.Create(s_sphereConfiguration, GraphicsDevice, surfaceEffect);
         _camera = new OrbitCamera();
-        _performance = new PerformanceMonitor(GraphicsDevice);
     }
 
     protected override void Update(GameTime gameTime) {
-        var keyboard = Keyboard.GetState();
-        if (keyboard.IsKeyDown(Keys.Escape)) {
+        using var timing = Debugger.Measure("Update");
+
+        InputManager.BeforeUpdate();
+        Debugger.Update(gameTime);
+        if (InputManager.IsClick(Keys.Escape, InputFocus.Scene)) {
             Exit();
         }
 
-        if (WasPressed(keyboard, Keys.F1)) {
-            _showSurface = !_showSurface;
-        }
+        _camera.Update(GraphicsDevice.Viewport);
 
-        if (WasPressed(keyboard, Keys.F2)) {
-            _showWireframe = !_showWireframe;
-        }
-
-        if (WasPressed(keyboard, Keys.F3)) {
-            _showGuideLines = !_showGuideLines;
-        }
-
-        if (WasPressed(keyboard, Keys.F4)) {
-            _selectionFrozen = !_selectionFrozen;
-            if (!_selectionFrozen) {
-                _previousSelectionView = null;
-            }
-        }
-
-        _previousKeyboardState = keyboard;
-
-        _camera.Update(gameTime, GraphicsDevice.Viewport);
-        if (!_selectionFrozen
-            && (!_previousSelectionView.HasValue
-                || !_previousSelectionView.Value.Same(_camera.View))) {
+        if (!Debugger.SelectionFrozen && (!_prevCameraView.HasValue || !_prevCameraView.Value.Same(_camera.View))) {
             _sphere.Update(_camera.View);
-            _previousSelectionView = _camera.View;
+            _prevCameraView = _camera.View;
         }
 
         base.Update(gameTime);
+        InputManager.AfterUpdate();
     }
 
     protected override void Draw(GameTime gameTime) {
-        GraphicsDevice.Clear(new Color(7, 11, 18));
-        _performance.BeginDraw();
-        _sphere.Draw(_camera.View, new PlanetRenderOptions(
-            _showSurface,
-            _showWireframe,
-            _showGuideLines
-        ));
-        var title = _performance.Observe(_sphere.Metrics, gameTime);
-        if (title is not null) {
-            _performanceTitle = title;
+        using (Debugger.Measure("Draw")) {
+            GraphicsDevice.Clear(new Color(7, 11, 18));
+            _sphere.Draw(_camera.View, Debugger.RenderOptions);
+            base.Draw(gameTime);
         }
-
-        var selectionState = _selectionFrozen ? "frozen" : "running";
-        Window.Title = $"{_performanceTitle} | F1 surface:{OnOff(_showSurface)} F2 wireframe:{OnOff(_showWireframe)} F3 guides:{OnOff(_showGuideLines)} F4 selection:{selectionState}";
-        base.Draw(gameTime);
+        Debugger.Draw();
+        Debugger.CompleteFrame(_sphere.Metrics);
     }
 
     protected override void UnloadContent() {
-        _performance.Dispose();
+        Debugger.Dispose();
+        InputManager.Dispose();
         _sphere.Dispose();
         base.UnloadContent();
     }
 
-    private bool WasPressed(KeyboardState keyboard, Keys key) {
-        return keyboard.IsKeyDown(key) && _previousKeyboardState.IsKeyUp(key);
-    }
-
-    private static string OnOff(bool value) {
-        return value ? "on" : "off";
-    }
 }

@@ -6,16 +6,15 @@
     <PublishReadyToRun>false</PublishReadyToRun>
     <TieredCompilation>false</TieredCompilation>
     <UseWindowsForms>true</UseWindowsForms>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <PropertyGroup>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Icon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
     <PackageReference Include="MonoGame.Framework.WindowsDX" Version="3.8.*" />
     <PackageReference Include="MonoGame.Content.Builder.Task" Version="3.8.*" />
-  </ItemGroup>
-  <ItemGroup>
-    <Compile Remove="tools\**\*.cs" />
   </ItemGroup>
 </Project>

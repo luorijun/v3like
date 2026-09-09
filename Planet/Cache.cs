@@ -6,8 +6,6 @@ namespace monogame.Planet;
 internal sealed class ChunkCache : IDisposable {
     private readonly Dictionary<ChunkAddress, Entry> _entries;
     private readonly LinkedList<ChunkAddress> _useOrder = new();
-    private long _cacheMisses;
-    private long _cacheEvictions;
 
     internal ChunkCache(int capacity) {
         if (capacity <= 0) {
@@ -20,11 +18,8 @@ internal sealed class ChunkCache : IDisposable {
 
     internal int Capacity { get; }
 
-    internal CacheMetrics Metrics => new(_cacheMisses, _cacheEvictions);
-
     internal Chunk Get(in ChunkAddress address) {
         if (!_entries.TryGetValue(address, out var entry)) {
-            _cacheMisses++;
             return null;
         }
 
@@ -49,9 +44,7 @@ internal sealed class ChunkCache : IDisposable {
             throw new InvalidOperationException("The chunk is already cached.");
         }
 
-        var evicted = _entries.Count == Capacity;
-        if (evicted) {
-            _cacheEvictions++;
+        if (_entries.Count == Capacity) {
             var addressToRemove = _useOrder.Last!.Value;
             var entryToRemove = _entries[addressToRemove];
             _useOrder.RemoveLast();

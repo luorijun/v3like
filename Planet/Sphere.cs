@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
+using monogame.Debugging;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using monogame.Utils;
@@ -50,8 +50,6 @@ internal sealed class Sphere : IDisposable {
     private readonly int _maximumLodLevel;
     private SelectionCounters _selectionCounters;
     private SelectionMetrics _selectionMetrics;
-    private long _pageGenerations;
-    private long _pageGenerationTimestampTicks;
     private int _targetLodLevel = -1;
 
     private Sphere(
@@ -114,12 +112,7 @@ internal sealed class Sphere : IDisposable {
         };
     }
 
-    internal SphereMetrics Metrics => new(
-        _selectionMetrics,
-        _chunkCache.Metrics,
-        _pageGenerations,
-        _pageGenerationTimestampTicks
-    );
+    internal SelectionMetrics Metrics => _selectionMetrics;
 
     internal static Sphere Create(
         in SphereConfiguration configuration,
@@ -137,7 +130,7 @@ internal sealed class Sphere : IDisposable {
     }
 
     internal void Update(in View view) {
-        var started = Stopwatch.GetTimestamp();
+        using var timing = Debugger.Measure("Chunk selection");
         _targetLodLevel = SelectTargetLodLevel(view, _targetLodLevel);
         _activeChunkAddresses.Clear();
         _selectionCounters = default;
@@ -147,14 +140,10 @@ internal sealed class Sphere : IDisposable {
         }
 
         _selectionMetrics = new SelectionMetrics(
-            _selectionMetrics.Revision + 1,
             _targetLodLevel,
-            Stopwatch.GetElapsedTime(started).TotalMilliseconds,
             _selectionCounters.VisitedNodes,
             _activeChunkAddresses.Count,
             _selectionCounters.HorizonRejected,
-            _selectionCounters.VisitedNodes
-                - _selectionCounters.HorizonRejected,
             _selectionCounters.FrustumRejected
         );
     }
@@ -257,6 +246,7 @@ internal sealed class Sphere : IDisposable {
     }
 
     private void DrawSurface() {
+        using var timing = Debugger.Measure("Surface");
         _graphicsDevice.BlendState = BlendState.Opaque;
         _graphicsDevice.DepthStencilState = DepthStencilState.Default;
         _graphicsDevice.RasterizerState = _solidRasterizerState;
@@ -271,6 +261,7 @@ internal sealed class Sphere : IDisposable {
     }
 
     private void DrawWireframe() {
+        using var timing = Debugger.Measure("Wireframe");
         _graphicsDevice.BlendState = BlendState.Opaque;
         _graphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
         _graphicsDevice.RasterizerState = _wireframeRasterizerState;
@@ -296,35 +287,37 @@ internal sealed class Sphere : IDisposable {
             return chunk.IndexTexture;
         }
 
-        var started = Stopwatch.GetTimestamp();
+        using var timing = Debugger.Measure("Chunk creation");
         address.GetFaceRegion(out var position, out var size);
-        var colors = _logicalGrid.CreateIndexColors(
-            CubeFace.GetOrientation(address.Face),
-            position,
-            size,
-            _textureSampleCount
-        );
-        var texture = new Texture2D(
-            _graphicsDevice,
-            _textureSampleCount,
-            _textureSampleCount,
-            false,
-            SurfaceFormat.Color
-        );
-
+        Color[] colors;
+        using (Debugger.Measure("Index colors")) {
+            colors = _logicalGrid.CreateIndexColors(
+                CubeFace.GetOrientation(address.Face),
+                position,
+                size,
+                _textureSampleCount
+            );
+        }
+        Texture2D texture = null;
         try {
-            texture.SetData(colors);
+            using (Debugger.Measure("Texture upload")) {
+                texture = new Texture2D(
+                    _graphicsDevice,
+                    _textureSampleCount,
+                    _textureSampleCount,
+                    false,
+                    SurfaceFormat.Color
+                );
+                texture.SetData(colors);
+            }
             chunk = new Chunk(address, texture);
             _chunkCache.Add(chunk);
         }
         catch {
-            texture.Dispose();
+            texture?.Dispose();
             throw;
         }
 
-        _pageGenerations++;
-        _pageGenerationTimestampTicks +=
-            Stopwatch.GetTimestamp() - started;
         return texture;
     }
 
@@ -341,6 +334,7 @@ internal sealed class Sphere : IDisposable {
     }
 
     private void DrawGuideLines(in Matrix viewProjection) {
+        using var timing = Debugger.Measure("Guide lines");
         _guideLineEffect.World = Matrix.Identity;
         _guideLineEffect.View = Matrix.Identity;
         _guideLineEffect.Projection = viewProjection;
