@@ -39,36 +39,50 @@ internal sealed class LogicalGrid {
         ValidateTopology();
     }
 
-    internal Color[] CreateIndexColors(
-        in Matrix faceOrientation,
-        in Vector2 chunkPosition,
-        float chunkSize,
-        int textureSampleCount
-    ) {
-        var colors = new Color[checked(textureSampleCount * textureSampleCount)];
-        var step = chunkSize / (textureSampleCount - 1);
-        var previousRowFirstTileId = -1;
+    // GPU tables use the same centers, adjacency and tile IDs as the CPU locator.
+    // Three RGBA texels per tile: center/count, then its six neighbor IDs.
+    internal GpuGridData CreateGpuData() {
+        const int width = 2048;
+        var tiles = new Vector4[((TileCount * 3 + width - 1) / width) * width];
+        for (var tile = 0; tile < TileCount; tile++) {
+            tiles[tile * 3] = new Vector4(_tileCenters[tile], _neighborCounts[tile]);
+            var offset = tile * MaximumNeighborCount;
+            tiles[tile * 3 + 1] = new Vector4(
+                _neighbors[offset], _neighbors[offset + 1], _neighbors[offset + 2], 0);
+            tiles[tile * 3 + 2] = new Vector4(
+                _neighbors[offset + 3], _neighbors[offset + 4], _neighbors[offset + 5], 0);
+        }
 
-        for (var y = 0; y < textureSampleCount; y++) {
-            var pointY = chunkPosition.Y + y * step;
-            var tileId = previousRowFirstTileId;
-            for (var x = 0; x < textureSampleCount; x++) {
-                var point = new Vector2(
-                    chunkPosition.X + x * step,
-                    pointY
-                );
-                var direction = Utils.Mesh.GetSphereDirection(point, faceOrientation);
-                tileId = tileId < 0
-                    ? LocateFromProjection(direction)
-                    : LocateFromSeed(direction, tileId);
-                if (x == 0) {
-                    previousRowFirstTileId = tileId;
+        var samplesPerFace = (Frequency + 1) * (Frequency + 2) / 2;
+        var seeds = new float[((BaseFaceCount * samplesPerFace + width - 1) / width) * width];
+        var next = 0;
+        for (var face = 0; face < BaseFaceCount; face++) {
+            for (var i = 0; i <= Frequency; i++) {
+                for (var j = 0; j <= Frequency - i; j++) {
+                    seeds[next++] = GetTileId(face, i, j, Frequency - i - j);
                 }
-
-                colors[y * textureSampleCount + x] = CreateIndexColor(tileId);
             }
         }
 
+        var faces = new Vector4[BaseFaceCount * 5];
+        for (var face = 0; face < BaseFaceCount; face++) {
+            var projection = _faceProjections[face];
+            faces[face * 5] = new Vector4(projection.Normal, projection.PlaneDistance);
+            faces[face * 5 + 1] = new Vector4(projection.A, 0);
+            faces[face * 5 + 2] = new Vector4(projection.AB, 0);
+            faces[face * 5 + 3] = new Vector4(projection.AC, 0);
+            faces[face * 5 + 4] = new Vector4(projection.Dot00, projection.Dot01,
+                projection.Dot11, projection.InverseDenominator);
+        }
+
+        return new GpuGridData(width, tiles, seeds, faces);
+    }
+
+    internal static Color[] CreateInitialDisplayColors() {
+        var colors = new Color[TileCount];
+        for (var tile = 0; tile < colors.Length; tile++) {
+            colors[tile] = CreateIndexColor(tile);
+        }
         return colors;
     }
 
@@ -125,19 +139,20 @@ internal sealed class LogicalGrid {
 
     private int LocateFromSeed(in Vector3 direction, int seedTileId) {
         var current = seedTileId;
-        var currentDot = Vector3.Dot(direction, _tileCenters[current]);
 
         while (true) {
             var best = current;
-            var bestDot = currentDot;
             var offset = current * MaximumNeighborCount;
             for (var index = 0; index < _neighborCounts[current]; index++) {
                 var candidate = _neighbors[offset + index];
-                var candidateDot = Vector3.Dot(direction, _tileCenters[candidate]);
-                if (candidateDot > bestDot
-                    || (candidateDot == bestDot && candidate < best)) {
+                var candidateCenter = _tileCenters[candidate];
+                var bestCenter = _tileCenters[best];
+                var dotDifference =
+                    direction.X * ((double)candidateCenter.X - bestCenter.X) +
+                    direction.Y * ((double)candidateCenter.Y - bestCenter.Y) +
+                    direction.Z * ((double)candidateCenter.Z - bestCenter.Z);
+                if (dotDifference > 0.0 || (dotDifference == 0.0 && candidate < best)) {
                     best = candidate;
-                    bestDot = candidateDot;
                 }
             }
 
@@ -146,7 +161,6 @@ internal sealed class LogicalGrid {
             }
 
             current = best;
-            currentDot = bestDot;
         }
     }
 
@@ -424,3 +438,10 @@ internal sealed class LogicalGrid {
         float InverseDenominator
     );
 }
+
+internal readonly record struct GpuGridData(
+    int Width,
+    Vector4[] Tiles,
+    float[] Seeds,
+    Vector4[] Faces
+);

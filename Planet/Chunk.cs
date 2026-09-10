@@ -1,36 +1,17 @@
 using System;
 using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Graphics;
 using monogame.Utils;
 
 namespace monogame.Planet;
 
-internal sealed class Chunk : IDisposable {
-    internal Chunk(in ChunkAddress address, Texture2D indexTexture) {
-        ArgumentNullException.ThrowIfNull(indexTexture);
-        Address = address;
-        IndexTexture = indexTexture;
-    }
-
-    internal ChunkAddress Address { get; }
-
-    internal Texture2D IndexTexture { get; }
-
-    public void Dispose() {
-        IndexTexture.Dispose();
-    }
-}
-
 internal readonly record struct ChunkAddress {
-    // Chunk origins and sizes remain distinguishable in face-coordinate floats.
-    internal const int MaximumPrecisionLevel = 23;
-
     internal ChunkAddress(FaceId face, int level, int x, int y) {
         if (!Enum.IsDefined(face)) {
             throw new ArgumentOutOfRangeException(nameof(face));
         }
 
-        if (level is < 0 or > MaximumPrecisionLevel) {
+        // The address uses positive, signed 32-bit counts (1 << level).
+        if (level is < 0 or > 30) {
             throw new ArgumentOutOfRangeException(nameof(level));
         }
 

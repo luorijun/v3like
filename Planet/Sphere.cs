@@ -17,25 +17,22 @@ internal sealed class Sphere : IDisposable {
     private const int LodColorCycleLength = 6;
     private const float LodColorSaturation = 0.72f;
     private const float LodColorBrightness = 0.9f;
-    private const double TargetPixelsPerTexel = 1.0;
-    private const double LodHysteresisPixelsPerTexel = 0.15;
-    private const double SplitPixelsPerTexel =
-        TargetPixelsPerTexel + LodHysteresisPixelsPerTexel;
-    private const double MergePixelsPerTexel =
-        TargetPixelsPerTexel - LodHysteresisPixelsPerTexel;
+    private const double LodHysteresisRatio = 0.15;
 
     private readonly GraphicsDevice _graphicsDevice;
     private readonly LogicalGrid _logicalGrid;
-    private readonly ChunkCache _chunkCache;
     private readonly List<ChunkAddress> _activeChunkAddresses = [];
     private readonly Effect _surfaceEffect;
     private readonly EffectTechnique _surfaceTechnique;
+    private readonly Texture2D _gridTiles;
+    private readonly Texture2D _gridSeeds;
+    private readonly Texture2D _gridFaces;
+    private readonly Texture2D _tileDisplayColors;
     private readonly EffectTechnique _wireframeTechnique;
     private readonly EffectParameter _worldViewProjectionParameter;
     private readonly EffectParameter _faceOrientationParameter;
     private readonly EffectParameter _chunkPositionParameter;
     private readonly EffectParameter _chunkSizeParameter;
-    private readonly EffectParameter _indexTextureParameter;
     private readonly EffectParameter _solidColorParameter;
     private readonly BasicEffect _guideLineEffect;
     private readonly VertexBuffer _chunkMeshVertexBuffer;
@@ -45,9 +42,8 @@ internal sealed class Sphere : IDisposable {
     private readonly int _guideLinePrimitiveCount;
     private readonly RasterizerState _solidRasterizerState;
     private readonly RasterizerState _wireframeRasterizerState;
-    private readonly int _textureResolution;
-    private readonly int _textureSampleCount;
-    private readonly int _maximumLodLevel;
+    private readonly int _meshResolution;
+    private readonly double _pixelsPerCell;
     private SelectionCounters _selectionCounters;
     private SelectionMetrics _selectionMetrics;
     private int _targetLodLevel = -1;
@@ -56,23 +52,20 @@ internal sealed class Sphere : IDisposable {
         GraphicsDevice graphicsDevice,
         Effect surfaceEffect,
         int meshResolution,
-        int textureResolution,
-        int chunkCacheCapacity
+        double pixelsPerCell
     ) {
         ArgumentNullException.ThrowIfNull(graphicsDevice);
         ArgumentNullException.ThrowIfNull(surfaceEffect);
 
         _graphicsDevice = graphicsDevice;
         _logicalGrid = new LogicalGrid();
-        _chunkCache = new ChunkCache(chunkCacheCapacity);
 
-        _textureResolution = textureResolution;
-        _textureSampleCount = checked(textureResolution + 1);
+        _meshResolution = meshResolution;
+        _pixelsPerCell = pixelsPerCell;
 
-        _maximumLodLevel = CalculateMaximumLodLevel(meshResolution);
 
         var meshVertexCount = checked(meshResolution + 1);
-        _chunkMeshVertexBuffer = CreateChunkMeshVertexBuffer(graphicsDevice, meshVertexCount, _textureSampleCount);
+        _chunkMeshVertexBuffer = CreateChunkMeshVertexBuffer(graphicsDevice, meshVertexCount);
         var indices = Mesh.CreateTriangleIndices(meshVertexCount);
         _chunkMeshIndexBuffer = new IndexBuffer(
             graphicsDevice,
@@ -90,7 +83,6 @@ internal sealed class Sphere : IDisposable {
         _faceOrientationParameter = GetRequiredParameter(_surfaceEffect, "FaceOrientation");
         _chunkPositionParameter = GetRequiredParameter(_surfaceEffect, "ChunkPosition");
         _chunkSizeParameter = GetRequiredParameter(_surfaceEffect, "ChunkSize");
-        _indexTextureParameter = GetRequiredParameter(_surfaceEffect, "TileIndexTexture");
         _solidColorParameter = GetRequiredParameter(_surfaceEffect, "SurfaceColor");
 
         _guideLineEffect = new BasicEffect(graphicsDevice) {
@@ -110,9 +102,56 @@ internal sealed class Sphere : IDisposable {
             FillMode = FillMode.WireFrame,
             DepthBias = WireframeDepthBias,
         };
+
+        var gridData = _logicalGrid.CreateGpuData();
+        try {
+            _gridTiles = CreateGridTexture(graphicsDevice, gridData.Width, gridData.Tiles, SurfaceFormat.Vector4);
+            _gridSeeds = CreateGridTexture(graphicsDevice, gridData.Width, gridData.Seeds, SurfaceFormat.Single);
+            _gridFaces = CreateGridTexture(graphicsDevice, 5, gridData.Faces, SurfaceFormat.Vector4);
+            _tileDisplayColors = new Texture2D(graphicsDevice, gridData.Width,
+                (LogicalGrid.TileCount + gridData.Width - 1) / gridData.Width, false, SurfaceFormat.Color);
+            UpdateDisplayColors(0, LogicalGrid.CreateInitialDisplayColors());
+            GetRequiredParameter(_surfaceEffect, "GridTiles").SetValue(_gridTiles);
+            GetRequiredParameter(_surfaceEffect, "GridSeeds").SetValue(_gridSeeds);
+            GetRequiredParameter(_surfaceEffect, "GridFaces").SetValue(_gridFaces);
+            GetRequiredParameter(_surfaceEffect, "TileDisplayColors").SetValue(_tileDisplayColors);
+            GetRequiredParameter(_surfaceEffect, "GridDataWidth").SetValue(gridData.Width);
+            GetRequiredParameter(_surfaceEffect, "GridFrequency").SetValue(LogicalGrid.Frequency);
+        }
+        catch {
+            _tileDisplayColors?.Dispose();
+            _gridFaces?.Dispose();
+            _gridSeeds?.Dispose();
+            _gridTiles?.Dispose();
+            throw;
+        }
     }
 
     internal SelectionMetrics Metrics => _selectionMetrics;
+
+    // Call on the graphics thread before drawing.
+    internal void UpdateDisplayColors(int firstTileId, Color[] colors) {
+        ArgumentNullException.ThrowIfNull(colors);
+        if (firstTileId < 0 || firstTileId > LogicalGrid.TileCount
+            || colors.Length > LogicalGrid.TileCount - firstTileId) {
+            throw new ArgumentOutOfRangeException(nameof(firstTileId));
+        }
+
+        var width = _tileDisplayColors.Width;
+        var offset = 0;
+        while (offset < colors.Length) {
+            var tile = firstTileId + offset;
+            var x = tile % width;
+            var remaining = colors.Length - offset;
+            var rows = x == 0 ? remaining / width : 0;
+            var region = rows > 0
+                ? new Rectangle(0, tile / width, width, rows)
+                : new Rectangle(x, tile / width, Math.Min(width - x, remaining), 1);
+            var count = region.Width * region.Height;
+            _tileDisplayColors.SetData(0, region, colors, offset, count);
+            offset += count;
+        }
+    }
 
     internal static Sphere Create(
         in SphereConfiguration configuration,
@@ -124,14 +163,16 @@ internal sealed class Sphere : IDisposable {
             graphicsDevice,
             surfaceEffect,
             configuration.MeshResolution,
-            configuration.TextureResolution,
-            configuration.ChunkCacheCapacity
+            configuration.PixelsPerCell
         );
     }
 
-    internal void Update(in View view) {
+    internal void Update(in View view, double minimumHeight) {
         using var timing = Debugger.Measure("Chunk selection");
-        _targetLodLevel = SelectTargetLodLevel(view, _targetLodLevel);
+        var maxLod = SelectTargetLodLevel(view.FocalLength, minimumHeight, 0);
+        _targetLodLevel = SelectTargetLodLevel(view.FocalLength,
+            Math.Max(view.CameraLength - 1.0, minimumHeight),
+            Math.Clamp(_targetLodLevel, 0, maxLod));
         _activeChunkAddresses.Clear();
         _selectionCounters = default;
 
@@ -141,6 +182,7 @@ internal sealed class Sphere : IDisposable {
 
         _selectionMetrics = new SelectionMetrics(
             _targetLodLevel,
+            maxLod,
             _selectionCounters.VisitedNodes,
             _activeChunkAddresses.Count,
             _selectionCounters.HorizonRejected,
@@ -154,10 +196,6 @@ internal sealed class Sphere : IDisposable {
         _graphicsDevice.Indices = _chunkMeshIndexBuffer;
 
         if (options.ShowSurface) {
-            foreach (var address in _activeChunkAddresses) {
-                _chunkCache.Touch(address);
-            }
-
             DrawSurface();
         }
 
@@ -171,7 +209,10 @@ internal sealed class Sphere : IDisposable {
     }
 
     public void Dispose() {
-        _chunkCache.Dispose();
+        _tileDisplayColors.Dispose();
+        _gridFaces.Dispose();
+        _gridSeeds.Dispose();
+        _gridTiles.Dispose();
         _wireframeRasterizerState.Dispose();
         _solidRasterizerState.Dispose();
         _guideLineVertexBuffer.Dispose();
@@ -181,42 +222,25 @@ internal sealed class Sphere : IDisposable {
         _surfaceEffect.Dispose();
     }
 
-    private int SelectTargetLodLevel(in View view, int previousLevel) {
-        var surfaceDistance = Math.Max(
-            view.CameraLength - 1.0,
-            double.Epsilon
-        );
-        var rootPixelsPerTexel = MathHelper.PiOver2
-            * view.FocalLength
-            / (surfaceDistance * _textureResolution);
+    private int SelectTargetLodLevel(double focalLength, double height, int previousLevel) {
+        var rootCellPixels = MathHelper.PiOver2 * focalLength / (height * _meshResolution);
 
-        if (previousLevel < 0) {
-            var level = 0;
-            var pixelsPerTexel = rootPixelsPerTexel;
-            while (level < _maximumLodLevel
-                && pixelsPerTexel > TargetPixelsPerTexel) {
-                level++;
-                pixelsPerTexel *= 0.5;
-            }
-
-            return level;
-        }
-
+        var splitThreshold = _pixelsPerCell * (1.0 + LodHysteresisRatio);
+        var mergeThreshold = _pixelsPerCell * (1.0 - LodHysteresisRatio);
         var selectedLevel = previousLevel;
-        var selectedPixelsPerTexel = Math.ScaleB(
-            rootPixelsPerTexel,
+        var cellPixels = Math.ScaleB(
+            rootCellPixels,
             -selectedLevel
         );
-        while (selectedLevel < _maximumLodLevel
-            && selectedPixelsPerTexel > SplitPixelsPerTexel) {
+        while (cellPixels > splitThreshold) {
             selectedLevel++;
-            selectedPixelsPerTexel *= 0.5;
+            cellPixels *= 0.5;
         }
 
         while (selectedLevel > 0
-            && selectedPixelsPerTexel * 2.0 < MergePixelsPerTexel) {
+            && cellPixels * 2.0 < mergeThreshold) {
             selectedLevel--;
-            selectedPixelsPerTexel *= 2.0;
+            cellPixels *= 2.0;
         }
 
         return selectedLevel;
@@ -250,12 +274,10 @@ internal sealed class Sphere : IDisposable {
         _graphicsDevice.BlendState = BlendState.Opaque;
         _graphicsDevice.DepthStencilState = DepthStencilState.Default;
         _graphicsDevice.RasterizerState = _solidRasterizerState;
-        _graphicsDevice.SamplerStates[0] = SamplerState.PointClamp;
         _surfaceEffect.CurrentTechnique = _surfaceTechnique;
 
         foreach (var address in _activeChunkAddresses) {
             ConfigureChunk(address);
-            _indexTextureParameter.SetValue(GetIndexTexture(address));
             DrawChunk();
         }
     }
@@ -281,46 +303,6 @@ internal sealed class Sphere : IDisposable {
         _chunkSizeParameter.SetValue(size);
     }
 
-    private Texture2D GetIndexTexture(in ChunkAddress address) {
-        var chunk = _chunkCache.Get(address);
-        if (chunk is not null) {
-            return chunk.IndexTexture;
-        }
-
-        using var timing = Debugger.Measure("Chunk creation");
-        address.GetFaceRegion(out var position, out var size);
-        Color[] colors;
-        using (Debugger.Measure("Index colors")) {
-            colors = _logicalGrid.CreateIndexColors(
-                CubeFace.GetOrientation(address.Face),
-                position,
-                size,
-                _textureSampleCount
-            );
-        }
-        Texture2D texture = null;
-        try {
-            using (Debugger.Measure("Texture upload")) {
-                texture = new Texture2D(
-                    _graphicsDevice,
-                    _textureSampleCount,
-                    _textureSampleCount,
-                    false,
-                    SurfaceFormat.Color
-                );
-                texture.SetData(colors);
-            }
-            chunk = new Chunk(address, texture);
-            _chunkCache.Add(chunk);
-        }
-        catch {
-            texture?.Dispose();
-            throw;
-        }
-
-        return texture;
-    }
-
     private void DrawChunk() {
         foreach (var pass in _surfaceEffect.CurrentTechnique.Passes) {
             pass.Apply();
@@ -330,6 +312,20 @@ internal sealed class Sphere : IDisposable {
                 0,
                 _chunkMeshPrimitiveCount
             );
+        }
+    }
+
+    private static Texture2D CreateGridTexture<T>(
+        GraphicsDevice device, int width, T[] data, SurfaceFormat format
+    ) where T : struct {
+        var texture = new Texture2D(device, width, data.Length / width, false, format);
+        try {
+            texture.SetData(data);
+            return texture;
+        }
+        catch {
+            texture.Dispose();
+            throw;
         }
     }
 
@@ -353,36 +349,21 @@ internal sealed class Sphere : IDisposable {
         }
     }
 
-    private static VertexBuffer CreateChunkMeshVertexBuffer(GraphicsDevice graphicsDevice, int meshVertexCount, int textureSampleCount) {
+    private static VertexBuffer CreateChunkMeshVertexBuffer(GraphicsDevice graphicsDevice, int meshVertexCount) {
         var vertices = Mesh.CreateGrid(
             meshVertexCount,
             Vector2.Zero,
             1.0f,
-            (_, _, point) => new VertexPositionTexture(
-                new Vector3(point, 0.0f),
-                new Vector2(
-                    (0.5f + point.X * (textureSampleCount - 1)) / textureSampleCount,
-                    (0.5f + point.Y * (textureSampleCount - 1)) / textureSampleCount
-                )
-            )
+            (_, _, point) => new VertexPosition(new Vector3(point, 0.0f))
         );
         var vertexBuffer = new VertexBuffer(
             graphicsDevice,
-            VertexPositionTexture.VertexDeclaration,
+            VertexPosition.VertexDeclaration,
             vertices.Length,
             BufferUsage.WriteOnly
         );
         vertexBuffer.SetData(vertices);
         return vertexBuffer;
-    }
-
-    private static int CalculateMaximumLodLevel(int meshResolution) {
-        var intervalBits = 0;
-        for (var value = meshResolution; value > 1; value >>= 1) {
-            intervalBits++;
-        }
-
-        return ChunkAddress.MaximumPrecisionLevel - intervalBits;
     }
 
     private static void ValidateConfiguration(
@@ -395,33 +376,18 @@ internal sealed class Sphere : IDisposable {
             );
         }
 
+        if (!double.IsFinite(configuration.PixelsPerCell) || configuration.PixelsPerCell <= 0) {
+            throw new ArgumentOutOfRangeException(
+                nameof(configuration),
+                "Pixels per mesh cell must be finite and positive."
+            );
+        }
+
         var meshVertexCount = (long)configuration.MeshResolution + 1;
         if (meshVertexCount * meshVertexCount > ushort.MaxValue) {
             throw new ArgumentOutOfRangeException(
                 nameof(configuration),
                 "Mesh resolution must fit in a 16-bit indexed mesh."
-            );
-        }
-
-        if (!IsPowerOfTwo(configuration.TextureResolution)) {
-            throw new ArgumentOutOfRangeException(
-                nameof(configuration),
-                "Texture resolution must be a positive power of two."
-            );
-        }
-
-        var textureSampleCount = (long)configuration.TextureResolution + 1;
-        if (textureSampleCount * textureSampleCount > int.MaxValue) {
-            throw new ArgumentOutOfRangeException(
-                nameof(configuration),
-                "The configured texture is too large."
-            );
-        }
-
-        if (configuration.ChunkCacheCapacity <= 0) {
-            throw new ArgumentOutOfRangeException(
-                nameof(configuration),
-                "Chunk cache capacity must be positive."
             );
         }
     }
@@ -527,6 +493,5 @@ internal readonly record struct PlanetRenderOptions(
 
 internal readonly record struct SphereConfiguration(
     int MeshResolution,
-    int TextureResolution,
-    int ChunkCacheCapacity
+    double PixelsPerCell
 );

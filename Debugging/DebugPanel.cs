@@ -18,9 +18,9 @@ internal sealed class DebugPanel {
     internal void Build(FrameProfiler profiler) {
         if (!Visible) return;
 
-        ImGui.SetNextWindowPos(new Vector2(12, 12), ImGuiCond.FirstUseEver);
+        ImGui.SetNextWindowPos(new Vector2(12, 40), ImGuiCond.FirstUseEver);
         var screen = ImGui.GetIO().DisplaySize;
-        ImGui.SetNextWindowSize(new Vector2(Math.Min(790, screen.X - 24), Math.Min(680, screen.Y - 24)), ImGuiCond.FirstUseEver);
+        ImGui.SetNextWindowSize(new Vector2(Math.Min(790, screen.X - 24), Math.Min(680, screen.Y - 52)), ImGuiCond.FirstUseEver);
         ImGui.SetNextWindowSizeConstraints(new Vector2(480, 240), new Vector2(float.MaxValue));
         var expanded = ImGui.Begin("Debug | Frame profiler", ref Visible);
         if (expanded) {
@@ -43,6 +43,9 @@ internal sealed class DebugPanel {
             ImGui.Checkbox("Wireframe [F2]", ref ShowWireframe);
             ImGui.SameLine();
             ImGui.Checkbox("Guides [F3]", ref ShowGuideLines);
+            ImGui.TextUnformatted(ShowSurface
+                ? "Surface renderer: GPU direct shading"
+                : "Surface hidden | Renderer: GPU direct shading");
             ImGui.Checkbox("Freeze selection [F4]", ref SelectionFrozen);
             ImGui.Separator();
 

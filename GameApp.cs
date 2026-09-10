@@ -9,8 +9,7 @@ namespace monogame;
 public sealed class GameApp : Game {
     private static readonly SphereConfiguration s_sphereConfiguration = new(
         MeshResolution: 16,
-        TextureResolution: 256,
-        ChunkCacheCapacity: 2000
+        PixelsPerCell: 32
     );
 
     private OrbitCamera _camera;
@@ -19,13 +18,14 @@ public sealed class GameApp : Game {
 
     public GameApp() {
         _ = new GraphicsDeviceManager(this) {
+            GraphicsProfile = GraphicsProfile.HiDef,
             PreferredBackBufferWidth = 1280,
             PreferredBackBufferHeight = 720,
         };
 
         IsMouseVisible = true;
         Window.AllowUserResizing = true;
-        Window.Title = "Cube Sphere | F5 Debug";
+        Window.Title = "Cube Sphere | GPU surface | F5 Debug";
         Content.RootDirectory = "Content";
     }
 
@@ -49,7 +49,7 @@ public sealed class GameApp : Game {
         _camera.Update(GraphicsDevice.Viewport);
 
         if (!Debugger.SelectionFrozen && (!_prevCameraView.HasValue || !_prevCameraView.Value.Same(_camera.View))) {
-            _sphere.Update(_camera.View);
+            _sphere.Update(_camera.View, OrbitCamera.MinimumHeight);
             _prevCameraView = _camera.View;
         }
 
@@ -58,12 +58,14 @@ public sealed class GameApp : Game {
     }
 
     protected override void Draw(GameTime gameTime) {
-        using (Debugger.Measure("Draw")) {
-            GraphicsDevice.Clear(new Color(7, 11, 18));
-            _sphere.Draw(_camera.View, Debugger.RenderOptions);
-            base.Draw(gameTime);
+        using (Debugger.MeasureGpu()) {
+            using (Debugger.Measure("Draw")) {
+                GraphicsDevice.Clear(new Color(7, 11, 18));
+                _sphere.Draw(_camera.View, Debugger.RenderOptions);
+                base.Draw(gameTime);
+            }
+            Debugger.Draw();
         }
-        Debugger.Draw();
         Debugger.CompleteFrame(_sphere.Metrics);
     }
 

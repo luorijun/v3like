@@ -9,6 +9,7 @@ internal struct SelectionCounters {
 // Current selection state; per-frame timings and invocation counts live in the profiler.
 internal readonly record struct SelectionMetrics(
     int TargetLod,
+    int MaxLod,
     int VisitedNodes,
     int ActiveChunks,
     int HorizonRejected,

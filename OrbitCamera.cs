@@ -7,7 +7,7 @@ namespace monogame;
 internal sealed class OrbitCamera {
     public const float FieldOfView = MathHelper.PiOver4;
 
-    private const float MinimumHeight = 0.0025f;
+    internal const float MinimumHeight = 0.01f;
     private const float InitialHeight = 1.8f;
     private const float MaximumHeight = 3.0f;
     private const float RotationPerPixel = 0.005f;
