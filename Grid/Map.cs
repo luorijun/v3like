@@ -1,10 +1,13 @@
 using System;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using Microsoft.Xna.Framework.Input;
 
 namespace monogame.Grid;
 
-// Owns tile topology and its GPU representation. Shared assets belong to GameManager.
+internal enum MapMode { Raw = 0, Terrain = 1 }
+
+// Owns tile topology, interaction and display data. Shared assets belong to GameManager.
 internal sealed class Map : IDisposable {
     internal const int Frequency = 358;
     internal const int TileCount = 10 * Frequency * Frequency + 2;
@@ -43,6 +46,28 @@ internal sealed class Map : IDisposable {
     private readonly EffectParameter _tileDisplayColorsParameter;
     private readonly EffectParameter _gridDataWidthParameter;
     private readonly EffectParameter _gridFrequencyParameter;
+    private readonly EffectParameter _tileSelectedParameter;
+    private readonly EffectParameter _borderEdgesParameter;
+    private readonly EffectParameter _borderCountParameter;
+    private readonly Vector4[] _borderEdges = new Vector4[MaximumNeighborCount];
+    private float _borderWidth = 0.15f;
+    private int _borderCount;
+
+    internal MapMode Mode { get; private set; } = MapMode.Terrain;
+    internal int? TileSelected { get; private set; }
+
+    // Fraction of each edge's spherical distance to the tile center.
+    internal float BorderWidth {
+        get => _borderWidth;
+        set {
+            if (!float.IsFinite(value) || value < 0 || value > 1) {
+                throw new ArgumentOutOfRangeException(nameof(value), "BorderWidth must be between 0 and 1.");
+            }
+            if (_borderWidth == value) return;
+            _borderWidth = value;
+            UpdateBorder();
+        }
+    }
 
     internal Map() {
         var graphicsDevice = GameManager.GraphicsDevice;
@@ -53,6 +78,9 @@ internal sealed class Map : IDisposable {
         _tileDisplayColorsParameter = GetRequiredParameter(effect, "TileDisplayColors");
         _gridDataWidthParameter = GetRequiredParameter(effect, "GridDataWidth");
         _gridFrequencyParameter = GetRequiredParameter(effect, "GridFrequency");
+        _tileSelectedParameter = GetRequiredParameter(effect, "TileSelected");
+        _borderEdgesParameter = GetRequiredParameter(effect, "BorderEdges");
+        _borderCountParameter = GetRequiredParameter(effect, "BorderCount");
 
         _baseVertices = CreateBaseVertices();
         _edgeIds = CreateEdgeIds();
@@ -67,7 +95,7 @@ internal sealed class Map : IDisposable {
             _gridFaces = CreateGridTexture(graphicsDevice, 5, gridData.Faces, SurfaceFormat.Vector4);
             _tileDisplayColors = new Texture2D(graphicsDevice, gridData.Width,
                 (TileCount + gridData.Width - 1) / gridData.Width, false, SurfaceFormat.Color);
-            UpdateDisplayColors(0, CreateInitialDisplayColors());
+            UpdateDisplayColors(0, CreateDisplayColors(Mode));
         }
         catch {
             _tileDisplayColors?.Dispose();
@@ -78,7 +106,47 @@ internal sealed class Map : IDisposable {
         }
     }
 
-    // Bind existing resources before the geometry draw; no data is uploaded here.
+    internal void Update(in View view) {
+        if (InputManager.IsClick(Keys.D0, InputFocus.Scene)) SetMode(MapMode.Raw);
+        if (InputManager.IsClick(Keys.D1, InputFocus.Scene)) SetMode(MapMode.Terrain);
+
+        if (!InputManager.IsClick(MouseButton.Left, InputFocus.Scene)) return;
+
+        var position = InputManager.MousePosition;
+        if (!view.Viewport.Bounds.Contains(position)) return;
+
+        // Picks the ideal unit sphere; the rendered LOD surface is an approximation.
+        var ray = view.CreateRay(position);
+        var distance = ray.Intersects(new BoundingSphere(Vector3.Zero, 1.0f));
+        TileSelected = distance.HasValue
+            ? LocateFromProjection(Vector3.Normalize(ray.Position + ray.Direction * distance.Value))
+            : null;
+        UpdateBorder();
+    }
+
+    private void UpdateBorder() {
+        _borderCount = 0;
+        if (TileSelected is not int tile || _borderWidth == 0) return;
+
+        var center = GetCenter(tile);
+        foreach (var neighbor in GetNeighbors(tile)) {
+            var normal = Vector3.Normalize(center - GetCenter(neighbor));
+            // asin(dot(direction, normal)) is the signed angular distance to
+            // the great-circle edge. Precompute its threshold for all pixels.
+            var centerSine = (double)center.X * normal.X
+                + (double)center.Y * normal.Y + (double)center.Z * normal.Z;
+            var threshold = (float)Math.Sin(_borderWidth * Math.Asin(Math.Clamp(centerSine, 0.0, 1.0)));
+            _borderEdges[_borderCount++] = new Vector4(normal, threshold);
+        }
+    }
+
+    private void SetMode(MapMode mode) {
+        if (Mode == mode) return;
+        UpdateDisplayColors(0, CreateDisplayColors(mode));
+        Mode = mode;
+    }
+
+    // Bind existing resources and selection before drawing; no texture upload here.
     internal void Bind() {
         _gridTilesParameter.SetValue(_gridTiles);
         _gridSeedsParameter.SetValue(_gridSeeds);
@@ -86,6 +154,9 @@ internal sealed class Map : IDisposable {
         _tileDisplayColorsParameter.SetValue(_tileDisplayColors);
         _gridDataWidthParameter.SetValue(_gridTiles.Width);
         _gridFrequencyParameter.SetValue(Frequency);
+        _tileSelectedParameter.SetValue(TileSelected ?? -1);
+        _borderEdgesParameter.SetValue(_borderEdges);
+        _borderCountParameter.SetValue(_borderCount);
     }
 
     // Call on the graphics thread before drawing.
@@ -172,8 +243,12 @@ internal sealed class Map : IDisposable {
         }
     }
 
-    private static Color[] CreateInitialDisplayColors() {
+    private static Color[] CreateDisplayColors(MapMode mode) {
         var colors = new Color[TileCount];
+        if (mode == MapMode.Terrain) {
+            Array.Fill(colors, new Color(83, 117, 76));
+            return colors;
+        }
         for (var tile = 0; tile < colors.Length; tile++) {
             colors[tile] = CreateIndexColor(tile);
         }

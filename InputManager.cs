@@ -11,6 +11,10 @@ internal static class InputManager {
     private struct InputRecord {
         internal bool? State;
         internal InputFocus? PressFocus;
+
+        internal readonly bool Matches(bool down, InputFocus? focus) {
+            return State == down && (focus is null || (Focus == focus && (PressFocus ?? Focus) == focus));
+        }
     }
 
     private static readonly InputRecord[] s_keyboard = new InputRecord[256];
@@ -92,23 +96,19 @@ internal static class InputManager {
     }
 
     internal static bool IsDown(Keys key, InputFocus? focus = null) {
-        var state = s_keyboard[(int)key];
-        return state.State == true && (focus is null || Focus == focus);
+        return s_keyboard[(int)key].Matches(true, focus);
     }
 
     internal static bool IsDown(MouseButton button, InputFocus? focus = null) {
-        var state = s_mouse[(int)button];
-        return state.State == true && (focus is null || Focus == focus);
+        return s_mouse[(int)button].Matches(true, focus);
     }
 
     internal static bool IsClick(Keys key, InputFocus? focus = null) {
-        var state = s_keyboard[(int)key];
-        return state.State == false && (focus is null || Focus == focus);
+        return s_keyboard[(int)key].Matches(false, focus);
     }
 
     internal static bool IsClick(MouseButton button, InputFocus? focus = null) {
-        var state = s_mouse[(int)button];
-        return state.State == false && (focus is null || Focus == focus);
+        return s_mouse[(int)button].Matches(false, focus);
     }
 
     internal static void AfterUpdate() {

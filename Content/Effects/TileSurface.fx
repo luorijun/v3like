@@ -5,6 +5,9 @@ float ChunkSize;
 float3 SurfaceColor;
 int GridFrequency;
 int GridDataWidth;
+int TileSelected;
+float4 BorderEdges[6];
+int BorderCount;
 Texture2D GridTiles;
 Texture2D GridSeeds;
 Texture2D GridFaces;
@@ -119,7 +122,21 @@ float4 TilePixelShaderFunction(VertexShaderOutput input) : COLOR0
     float3 direction = mul(float4(tangents.x, 1, -tangents.y, 0), FaceOrientation).xyz;
     int tile = LocateGpuTile(direction);
     if (tile < 0) return float4(1, 0, 1, 1);
-    return TileDisplayColors.Load(int3((uint)tile % (uint)GridDataWidth, (uint)tile / (uint)GridDataWidth, 0));
+    float4 color = TileDisplayColors.Load(int3((uint)tile % (uint)GridDataWidth, (uint)tile / (uint)GridDataWidth, 0));
+    if (tile == TileSelected)
+    {
+        color.rgb = lerp(color.rgb, float3(1, 1, 1), 0.16);
+        float3 unitDirection = normalize(direction);
+        float border = 0;
+        [loop] for (int edge = 0; edge < BorderCount; edge++)
+        {
+            // Sine-distance ratio approximates the angular ratio for these small tiles.
+            float ratio = dot(unitDirection, BorderEdges[edge].xyz) / BorderEdges[edge].w;
+            border = max(border, 1 - smoothstep(0, 1, ratio));
+        }
+        color.rgb = lerp(color.rgb, float3(1, 1, 1), border);
+    }
+    return color;
 }
 
 technique TileSurface

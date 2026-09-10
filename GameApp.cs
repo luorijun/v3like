@@ -49,6 +49,7 @@ public sealed class GameApp : Game {
         }
 
         _camera.Update(GraphicsDevice.Viewport);
+        _map.Update(_camera.View);
 
         if (!Debugger.SelectionFrozen && (!_prevCameraView.HasValue || !_prevCameraView.Value.Same(_camera.View))) {
             _sphere.Update(_camera.View, OrbitCamera.MinimumHeight);

@@ -15,8 +15,6 @@ internal sealed class OrbitCamera {
     private float _yaw = 0.75f;
     private float _pitch = 0.35f;
     private float _height = InitialHeight;
-    private int _viewportWidth;
-    private int _viewportHeight;
     private bool _hasView;
     private bool _rotating;
 
@@ -47,8 +45,7 @@ internal sealed class OrbitCamera {
             && _yaw == previousYaw
             && _pitch == previousPitch
             && _height == previousHeight
-            && viewport.Width == _viewportWidth
-            && viewport.Height == _viewportHeight) {
+            && viewport.Equals(View.Viewport)) {
             return;
         }
 
@@ -72,11 +69,9 @@ internal sealed class OrbitCamera {
         View = new View(
             position,
             FieldOfView,
-            viewport.Height,
+            viewport,
             viewMatrix * projectionMatrix
         );
-        _viewportWidth = viewport.Width;
-        _viewportHeight = viewport.Height;
         _hasView = true;
     }
 }

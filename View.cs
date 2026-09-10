@@ -1,5 +1,6 @@
 using System;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 
 namespace monogame;
 
@@ -7,18 +8,17 @@ internal readonly record struct View {
     public View(
         Vector3 cameraPosition,
         float verticalFieldOfView,
-        int viewportHeight,
+        Viewport viewport,
         Matrix viewProjection
     ) {
         CameraPosition = cameraPosition;
         VerticalFieldOfView = verticalFieldOfView;
-        ViewportHeight = viewportHeight;
+        Viewport = viewport;
         ViewProjection = viewProjection;
         EnsureValid();
 
-        CameraLengthSquared = LengthSquared(cameraPosition);
-        CameraLength = Math.Sqrt(CameraLengthSquared);
-        FocalLength = viewportHeight * 0.5 / Math.Tan(verticalFieldOfView * 0.5);
+        CameraLength = Math.Sqrt(LengthSquared(cameraPosition));
+        FocalLength = viewport.Height * 0.5 / Math.Tan(verticalFieldOfView * 0.5);
         Frustum = new BoundingFrustum(viewProjection);
     }
 
@@ -26,26 +26,33 @@ internal readonly record struct View {
 
     public float VerticalFieldOfView { get; }
 
-    public int ViewportHeight { get; }
+    public Viewport Viewport { get; }
 
     public Matrix ViewProjection { get; }
 
     internal double CameraLength { get; }
 
-    internal double CameraLengthSquared { get; }
-
     internal double FocalLength { get; }
 
     internal BoundingFrustum Frustum { get; }
 
+    // Perspective ray from the camera through a render-target pixel coordinate.
+    // Viewport containment and intersection with scene geometry belong to the caller.
+    internal Ray CreateRay(Point screenPosition) {
+        var farPoint = Viewport.Unproject(
+            new Vector3(screenPosition.X, screenPosition.Y, Viewport.MaxDepth),
+            ViewProjection, Matrix.Identity, Matrix.Identity);
+        return new Ray(CameraPosition, Vector3.Normalize(farPoint - CameraPosition));
+    }
+
     internal bool Same(in View other) {
         return CameraPosition == other.CameraPosition
             && VerticalFieldOfView == other.VerticalFieldOfView
-            && ViewportHeight == other.ViewportHeight
+            && Viewport.Equals(other.Viewport)
             && ViewProjection == other.ViewProjection;
     }
 
-    internal void EnsureValid() {
+    private void EnsureValid() {
         if (!IsFinite(CameraPosition) || CameraPosition.LengthSquared() <= 0.0f) {
             throw new ArgumentOutOfRangeException(nameof(CameraPosition));
         }
@@ -56,8 +63,11 @@ internal readonly record struct View {
             throw new ArgumentOutOfRangeException(nameof(VerticalFieldOfView));
         }
 
-        if (ViewportHeight <= 0) {
-            throw new ArgumentOutOfRangeException(nameof(ViewportHeight));
+        if (Viewport.Width <= 0 || Viewport.Height <= 0
+            || !float.IsFinite(Viewport.MinDepth) || !float.IsFinite(Viewport.MaxDepth)
+            || Viewport.MinDepth < 0.0f || Viewport.MaxDepth > 1.0f
+            || Viewport.MinDepth >= Viewport.MaxDepth) {
+            throw new ArgumentOutOfRangeException(nameof(Viewport));
         }
 
         if (!IsFinite(ViewProjection)) {
