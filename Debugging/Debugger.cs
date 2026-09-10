@@ -1,7 +1,7 @@
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using ImGuiNET;
-using monogame.Planet;
+using monogame.Lod;
 
 namespace monogame.Debugging;
 
@@ -14,7 +14,7 @@ internal static class Debugger {
     private static Microsoft.Xna.Framework.Graphics.GraphicsDevice s_device;
 
     internal static bool SelectionFrozen => s_panel.SelectionFrozen;
-    internal static PlanetRenderOptions RenderOptions => new(
+    internal static SphereRenderOptions RenderOptions => new(
         s_panel.ShowSurface, s_panel.ShowWireframe, s_panel.ShowGuideLines);
 
     internal static void Initialize(Game game) {

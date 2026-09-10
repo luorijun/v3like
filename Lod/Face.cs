@@ -1,7 +1,7 @@
 using System;
 using Microsoft.Xna.Framework;
 
-namespace monogame.Planet;
+namespace monogame.Lod;
 
 internal enum FaceId : byte {
     PositiveX,

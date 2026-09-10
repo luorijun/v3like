@@ -2,15 +2,15 @@ using System;
 using Microsoft.Xna.Framework;
 using monogame.Utils;
 
-namespace monogame.Planet;
+namespace monogame.Lod;
 
-internal readonly record struct ChunkAddress {
-    internal ChunkAddress(FaceId face, int level, int x, int y) {
+internal readonly record struct Chunk {
+    internal Chunk(FaceId face, int level, int x, int y) {
         if (!Enum.IsDefined(face)) {
             throw new ArgumentOutOfRangeException(nameof(face));
         }
 
-        // The address uses positive, signed 32-bit counts (1 << level).
+        // The chunk uses positive, signed 32-bit counts (1 << level).
         if (level is < 0 or > 30) {
             throw new ArgumentOutOfRangeException(nameof(level));
         }
@@ -38,12 +38,12 @@ internal readonly record struct ChunkAddress {
 
     internal int Y { get; }
 
-    internal ChunkAddress GetChild(int quadrant) {
+    internal Chunk GetChild(int quadrant) {
         if (quadrant is < 0 or > 3) {
             throw new ArgumentOutOfRangeException(nameof(quadrant));
         }
 
-        return new ChunkAddress(
+        return new Chunk(
             Face,
             Level + 1,
             X * 2 + (quadrant & 1),
@@ -71,9 +71,9 @@ internal static class ChunkGeometry {
     private const float AngularSafetyMargin = 1e-5f;
     private const double HorizonComparisonMargin = 1e-7;
 
-    internal static ChunkBounds CalculateBounds(in ChunkAddress address) {
-        address.GetFaceRegion(out var position, out var size);
-        var orientation = CubeFace.GetOrientation(address.Face);
+    internal static ChunkBounds CalculateBounds(in Chunk chunk) {
+        chunk.GetFaceRegion(out var position, out var size);
+        var orientation = CubeFace.GetOrientation(chunk.Face);
         var centerPoint = position + new Vector2(size * 0.5f);
         var center = Mesh.GetSphereDirection(centerPoint, orientation);
         var maximumPoint = position + new Vector2(size);
@@ -101,10 +101,7 @@ internal static class ChunkGeometry {
         }
     }
 
-    internal static bool IsFullyBehindHorizon(
-        in ChunkBounds bounds,
-        in View view
-    ) {
+    internal static bool IsFullyBehindHorizon(in ChunkBounds bounds, in View view) {
         if (view.CameraLength <= 1.0) {
             return false;
         }
@@ -124,10 +121,7 @@ internal static class ChunkGeometry {
         return centerDot < Math.Cos(rejectionAngle) - HorizonComparisonMargin;
     }
 
-    internal static bool IsOutsideFrustum(
-        in ChunkBounds bounds,
-        in View view
-    ) {
+    internal static bool IsOutsideFrustum(in ChunkBounds bounds, in View view) {
         return view.Frustum.Contains(bounds.Sphere) == ContainmentType.Disjoint;
     }
 }

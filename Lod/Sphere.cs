@@ -5,7 +5,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using monogame.Utils;
 
-namespace monogame.Planet;
+namespace monogame.Lod;
 
 internal sealed class Sphere : IDisposable {
     private const int CubeFaceCount = 6;
@@ -19,15 +19,9 @@ internal sealed class Sphere : IDisposable {
     private const float LodColorBrightness = 0.9f;
     private const double LodHysteresisRatio = 0.15;
 
-    private readonly GraphicsDevice _graphicsDevice;
-    private readonly LogicalGrid _logicalGrid;
-    private readonly List<ChunkAddress> _activeChunkAddresses = [];
+    private readonly List<Chunk> _activeChunks = [];
     private readonly Effect _surfaceEffect;
     private readonly EffectTechnique _surfaceTechnique;
-    private readonly Texture2D _gridTiles;
-    private readonly Texture2D _gridSeeds;
-    private readonly Texture2D _gridFaces;
-    private readonly Texture2D _tileDisplayColors;
     private readonly EffectTechnique _wireframeTechnique;
     private readonly EffectParameter _worldViewProjectionParameter;
     private readonly EffectParameter _faceOrientationParameter;
@@ -48,27 +42,17 @@ internal sealed class Sphere : IDisposable {
     private SelectionMetrics _selectionMetrics;
     private int _targetLodLevel = -1;
 
-    private Sphere(
-        GraphicsDevice graphicsDevice,
-        Effect surfaceEffect,
-        int meshResolution,
-        double pixelsPerCell
-    ) {
-        ArgumentNullException.ThrowIfNull(graphicsDevice);
-        ArgumentNullException.ThrowIfNull(surfaceEffect);
+    internal Sphere(in SphereConfiguration configuration) {
+        ValidateConfiguration(configuration);
 
-        _graphicsDevice = graphicsDevice;
-        _logicalGrid = new LogicalGrid();
+        _meshResolution = configuration.MeshResolution;
+        _pixelsPerCell = configuration.PixelsPerCell;
 
-        _meshResolution = meshResolution;
-        _pixelsPerCell = pixelsPerCell;
-
-
-        var meshVertexCount = checked(meshResolution + 1);
-        _chunkMeshVertexBuffer = CreateChunkMeshVertexBuffer(graphicsDevice, meshVertexCount);
+        var meshVertexCount = checked(_meshResolution + 1);
+        _chunkMeshVertexBuffer = CreateChunkMeshVertexBuffer(meshVertexCount);
         var indices = Mesh.CreateTriangleIndices(meshVertexCount);
         _chunkMeshIndexBuffer = new IndexBuffer(
-            graphicsDevice,
+            GameManager.GraphicsDevice,
             IndexElementSize.SixteenBits,
             indices.Length,
             BufferUsage.WriteOnly
@@ -76,7 +60,7 @@ internal sealed class Sphere : IDisposable {
         _chunkMeshIndexBuffer.SetData(indices);
         _chunkMeshPrimitiveCount = indices.Length / 3;
 
-        _surfaceEffect = surfaceEffect.Clone();
+        _surfaceEffect = GameManager.SurfaceEffect;
         _surfaceTechnique = GetRequiredTechnique(_surfaceEffect, "TileSurface");
         _wireframeTechnique = GetRequiredTechnique(_surfaceEffect, "SolidColor");
         _worldViewProjectionParameter = GetRequiredParameter(_surfaceEffect, "WorldViewProjection");
@@ -85,12 +69,12 @@ internal sealed class Sphere : IDisposable {
         _chunkSizeParameter = GetRequiredParameter(_surfaceEffect, "ChunkSize");
         _solidColorParameter = GetRequiredParameter(_surfaceEffect, "SurfaceColor");
 
-        _guideLineEffect = new BasicEffect(graphicsDevice) {
+        _guideLineEffect = new BasicEffect(GameManager.GraphicsDevice) {
             VertexColorEnabled = true,
             LightingEnabled = false,
             TextureEnabled = false,
         };
-        _guideLineVertexBuffer = CreateGuideLineVertexBuffer(graphicsDevice);
+        _guideLineVertexBuffer = CreateGuideLineVertexBuffer();
         _guideLinePrimitiveCount = _guideLineVertexBuffer.VertexCount / 2;
 
         _solidRasterizerState = new RasterizerState {
@@ -102,70 +86,9 @@ internal sealed class Sphere : IDisposable {
             FillMode = FillMode.WireFrame,
             DepthBias = WireframeDepthBias,
         };
-
-        var gridData = _logicalGrid.CreateGpuData();
-        try {
-            _gridTiles = CreateGridTexture(graphicsDevice, gridData.Width, gridData.Tiles, SurfaceFormat.Vector4);
-            _gridSeeds = CreateGridTexture(graphicsDevice, gridData.Width, gridData.Seeds, SurfaceFormat.Single);
-            _gridFaces = CreateGridTexture(graphicsDevice, 5, gridData.Faces, SurfaceFormat.Vector4);
-            _tileDisplayColors = new Texture2D(graphicsDevice, gridData.Width,
-                (LogicalGrid.TileCount + gridData.Width - 1) / gridData.Width, false, SurfaceFormat.Color);
-            UpdateDisplayColors(0, LogicalGrid.CreateInitialDisplayColors());
-            GetRequiredParameter(_surfaceEffect, "GridTiles").SetValue(_gridTiles);
-            GetRequiredParameter(_surfaceEffect, "GridSeeds").SetValue(_gridSeeds);
-            GetRequiredParameter(_surfaceEffect, "GridFaces").SetValue(_gridFaces);
-            GetRequiredParameter(_surfaceEffect, "TileDisplayColors").SetValue(_tileDisplayColors);
-            GetRequiredParameter(_surfaceEffect, "GridDataWidth").SetValue(gridData.Width);
-            GetRequiredParameter(_surfaceEffect, "GridFrequency").SetValue(LogicalGrid.Frequency);
-        }
-        catch {
-            _tileDisplayColors?.Dispose();
-            _gridFaces?.Dispose();
-            _gridSeeds?.Dispose();
-            _gridTiles?.Dispose();
-            throw;
-        }
     }
 
     internal SelectionMetrics Metrics => _selectionMetrics;
-
-    // Call on the graphics thread before drawing.
-    internal void UpdateDisplayColors(int firstTileId, Color[] colors) {
-        ArgumentNullException.ThrowIfNull(colors);
-        if (firstTileId < 0 || firstTileId > LogicalGrid.TileCount
-            || colors.Length > LogicalGrid.TileCount - firstTileId) {
-            throw new ArgumentOutOfRangeException(nameof(firstTileId));
-        }
-
-        var width = _tileDisplayColors.Width;
-        var offset = 0;
-        while (offset < colors.Length) {
-            var tile = firstTileId + offset;
-            var x = tile % width;
-            var remaining = colors.Length - offset;
-            var rows = x == 0 ? remaining / width : 0;
-            var region = rows > 0
-                ? new Rectangle(0, tile / width, width, rows)
-                : new Rectangle(x, tile / width, Math.Min(width - x, remaining), 1);
-            var count = region.Width * region.Height;
-            _tileDisplayColors.SetData(0, region, colors, offset, count);
-            offset += count;
-        }
-    }
-
-    internal static Sphere Create(
-        in SphereConfiguration configuration,
-        GraphicsDevice graphicsDevice,
-        Effect surfaceEffect
-    ) {
-        ValidateConfiguration(configuration);
-        return new Sphere(
-            graphicsDevice,
-            surfaceEffect,
-            configuration.MeshResolution,
-            configuration.PixelsPerCell
-        );
-    }
 
     internal void Update(in View view, double minimumHeight) {
         using var timing = Debugger.Measure("Chunk selection");
@@ -173,27 +96,27 @@ internal sealed class Sphere : IDisposable {
         _targetLodLevel = SelectTargetLodLevel(view.FocalLength,
             Math.Max(view.CameraLength - 1.0, minimumHeight),
             Math.Clamp(_targetLodLevel, 0, maxLod));
-        _activeChunkAddresses.Clear();
+        _activeChunks.Clear();
         _selectionCounters = default;
 
         for (var face = 0; face < CubeFaceCount; face++) {
-            SelectVisibleChunks(new ChunkAddress((FaceId)face, 0, 0, 0), view);
+            SelectVisibleChunks(new Chunk((FaceId)face, 0, 0, 0), view);
         }
 
         _selectionMetrics = new SelectionMetrics(
             _targetLodLevel,
             maxLod,
             _selectionCounters.VisitedNodes,
-            _activeChunkAddresses.Count,
+            _activeChunks.Count,
             _selectionCounters.HorizonRejected,
             _selectionCounters.FrustumRejected
         );
     }
 
-    internal void Draw(in View view, in PlanetRenderOptions options) {
+    internal void Draw(in View view, in SphereRenderOptions options) {
         _worldViewProjectionParameter.SetValue(view.ViewProjection);
-        _graphicsDevice.SetVertexBuffer(_chunkMeshVertexBuffer);
-        _graphicsDevice.Indices = _chunkMeshIndexBuffer;
+        GameManager.GraphicsDevice.SetVertexBuffer(_chunkMeshVertexBuffer);
+        GameManager.GraphicsDevice.Indices = _chunkMeshIndexBuffer;
 
         if (options.ShowSurface) {
             DrawSurface();
@@ -209,17 +132,12 @@ internal sealed class Sphere : IDisposable {
     }
 
     public void Dispose() {
-        _tileDisplayColors.Dispose();
-        _gridFaces.Dispose();
-        _gridSeeds.Dispose();
-        _gridTiles.Dispose();
         _wireframeRasterizerState.Dispose();
         _solidRasterizerState.Dispose();
         _guideLineVertexBuffer.Dispose();
         _chunkMeshIndexBuffer.Dispose();
         _chunkMeshVertexBuffer.Dispose();
         _guideLineEffect.Dispose();
-        _surfaceEffect.Dispose();
     }
 
     private int SelectTargetLodLevel(double focalLength, double height, int previousLevel) {
@@ -246,9 +164,9 @@ internal sealed class Sphere : IDisposable {
         return selectedLevel;
     }
 
-    private void SelectVisibleChunks(in ChunkAddress address, in View view) {
+    private void SelectVisibleChunks(in Chunk chunk, in View view) {
         _selectionCounters.VisitedNodes++;
-        var bounds = ChunkGeometry.CalculateBounds(address);
+        var bounds = ChunkGeometry.CalculateBounds(chunk);
         if (ChunkGeometry.IsFullyBehindHorizon(bounds, view)) {
             _selectionCounters.HorizonRejected++;
             return;
@@ -259,46 +177,46 @@ internal sealed class Sphere : IDisposable {
             return;
         }
 
-        if (address.Level == _targetLodLevel) {
-            _activeChunkAddresses.Add(address);
+        if (chunk.Level == _targetLodLevel) {
+            _activeChunks.Add(chunk);
             return;
         }
 
         for (var quadrant = 0; quadrant < 4; quadrant++) {
-            SelectVisibleChunks(address.GetChild(quadrant), view);
+            SelectVisibleChunks(chunk.GetChild(quadrant), view);
         }
     }
 
     private void DrawSurface() {
         using var timing = Debugger.Measure("Surface");
-        _graphicsDevice.BlendState = BlendState.Opaque;
-        _graphicsDevice.DepthStencilState = DepthStencilState.Default;
-        _graphicsDevice.RasterizerState = _solidRasterizerState;
+        GameManager.GraphicsDevice.BlendState = BlendState.Opaque;
+        GameManager.GraphicsDevice.DepthStencilState = DepthStencilState.Default;
+        GameManager.GraphicsDevice.RasterizerState = _solidRasterizerState;
         _surfaceEffect.CurrentTechnique = _surfaceTechnique;
 
-        foreach (var address in _activeChunkAddresses) {
-            ConfigureChunk(address);
+        foreach (var chunk in _activeChunks) {
+            ConfigureChunk(chunk);
             DrawChunk();
         }
     }
 
     private void DrawWireframe() {
         using var timing = Debugger.Measure("Wireframe");
-        _graphicsDevice.BlendState = BlendState.Opaque;
-        _graphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
-        _graphicsDevice.RasterizerState = _wireframeRasterizerState;
+        GameManager.GraphicsDevice.BlendState = BlendState.Opaque;
+        GameManager.GraphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
+        GameManager.GraphicsDevice.RasterizerState = _wireframeRasterizerState;
         _surfaceEffect.CurrentTechnique = _wireframeTechnique;
         _solidColorParameter.SetValue(CreateLodColor(_targetLodLevel));
 
-        foreach (var address in _activeChunkAddresses) {
-            ConfigureChunk(address);
+        foreach (var chunk in _activeChunks) {
+            ConfigureChunk(chunk);
             DrawChunk();
         }
     }
 
-    private void ConfigureChunk(in ChunkAddress address) {
-        address.GetFaceRegion(out var position, out var size);
-        _faceOrientationParameter.SetValue(CubeFace.GetOrientation(address.Face));
+    private void ConfigureChunk(in Chunk chunk) {
+        chunk.GetFaceRegion(out var position, out var size);
+        _faceOrientationParameter.SetValue(CubeFace.GetOrientation(chunk.Face));
         _chunkPositionParameter.SetValue(position);
         _chunkSizeParameter.SetValue(size);
     }
@@ -306,7 +224,7 @@ internal sealed class Sphere : IDisposable {
     private void DrawChunk() {
         foreach (var pass in _surfaceEffect.CurrentTechnique.Passes) {
             pass.Apply();
-            _graphicsDevice.DrawIndexedPrimitives(
+            GameManager.GraphicsDevice.DrawIndexedPrimitives(
                 PrimitiveType.TriangleList,
                 0,
                 0,
@@ -315,33 +233,19 @@ internal sealed class Sphere : IDisposable {
         }
     }
 
-    private static Texture2D CreateGridTexture<T>(
-        GraphicsDevice device, int width, T[] data, SurfaceFormat format
-    ) where T : struct {
-        var texture = new Texture2D(device, width, data.Length / width, false, format);
-        try {
-            texture.SetData(data);
-            return texture;
-        }
-        catch {
-            texture.Dispose();
-            throw;
-        }
-    }
-
     private void DrawGuideLines(in Matrix viewProjection) {
         using var timing = Debugger.Measure("Guide lines");
         _guideLineEffect.World = Matrix.Identity;
         _guideLineEffect.View = Matrix.Identity;
         _guideLineEffect.Projection = viewProjection;
-        _graphicsDevice.BlendState = BlendState.Opaque;
-        _graphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
-        _graphicsDevice.RasterizerState = RasterizerState.CullNone;
-        _graphicsDevice.SetVertexBuffer(_guideLineVertexBuffer);
+        GameManager.GraphicsDevice.BlendState = BlendState.Opaque;
+        GameManager.GraphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
+        GameManager.GraphicsDevice.RasterizerState = RasterizerState.CullNone;
+        GameManager.GraphicsDevice.SetVertexBuffer(_guideLineVertexBuffer);
 
         foreach (var pass in _guideLineEffect.CurrentTechnique.Passes) {
             pass.Apply();
-            _graphicsDevice.DrawPrimitives(
+            GameManager.GraphicsDevice.DrawPrimitives(
                 PrimitiveType.LineList,
                 0,
                 _guideLinePrimitiveCount
@@ -349,7 +253,7 @@ internal sealed class Sphere : IDisposable {
         }
     }
 
-    private static VertexBuffer CreateChunkMeshVertexBuffer(GraphicsDevice graphicsDevice, int meshVertexCount) {
+    private static VertexBuffer CreateChunkMeshVertexBuffer(int meshVertexCount) {
         var vertices = Mesh.CreateGrid(
             meshVertexCount,
             Vector2.Zero,
@@ -357,7 +261,7 @@ internal sealed class Sphere : IDisposable {
             (_, _, point) => new VertexPosition(new Vector3(point, 0.0f))
         );
         var vertexBuffer = new VertexBuffer(
-            graphicsDevice,
+            GameManager.GraphicsDevice,
             VertexPosition.VertexDeclaration,
             vertices.Length,
             BufferUsage.WriteOnly
@@ -366,10 +270,9 @@ internal sealed class Sphere : IDisposable {
         return vertexBuffer;
     }
 
-    private static void ValidateConfiguration(
-        in SphereConfiguration configuration
-    ) {
-        if (!IsPowerOfTwo(configuration.MeshResolution)) {
+    private static void ValidateConfiguration(in SphereConfiguration configuration) {
+        var resolution = configuration.MeshResolution;
+        if (resolution <= 0 || (resolution & (resolution - 1)) != 0) {
             throw new ArgumentOutOfRangeException(
                 nameof(configuration),
                 "Mesh resolution must be a positive power of two."
@@ -392,13 +295,7 @@ internal sealed class Sphere : IDisposable {
         }
     }
 
-    private static bool IsPowerOfTwo(int value) {
-        return value > 0 && (value & (value - 1)) == 0;
-    }
-
-    private static VertexBuffer CreateGuideLineVertexBuffer(
-        GraphicsDevice graphicsDevice
-    ) {
+    private static VertexBuffer CreateGuideLineVertexBuffer() {
         VertexPositionColor[] vertices = [
             .. CreateLatitudeLine(
                 1.0f + GuideSurfaceOffset,
@@ -418,7 +315,7 @@ internal sealed class Sphere : IDisposable {
             .. CreateRotationAxis(RotationAxisHalfLength),
         ];
         var vertexBuffer = new VertexBuffer(
-            graphicsDevice,
+            GameManager.GraphicsDevice,
             VertexPositionColor.VertexDeclaration,
             vertices.Length,
             BufferUsage.WriteOnly
@@ -427,11 +324,7 @@ internal sealed class Sphere : IDisposable {
         return vertexBuffer;
     }
 
-    private static VertexPositionColor[] CreateLatitudeLine(
-        float radius,
-        float latitudeDegrees,
-        Color color
-    ) {
+    private static VertexPositionColor[] CreateLatitudeLine(float radius, float latitudeDegrees, Color color) {
         var latitude = MathHelper.ToRadians(latitudeDegrees);
         var y = MathF.Sin(latitude) * radius;
         var horizontalRadius = MathF.Cos(latitude) * radius;
@@ -485,7 +378,7 @@ internal sealed class Sphere : IDisposable {
     }
 }
 
-internal readonly record struct PlanetRenderOptions(
+internal readonly record struct SphereRenderOptions(
     bool ShowSurface,
     bool ShowWireframe,
     bool ShowGuideLines

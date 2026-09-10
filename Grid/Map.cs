@@ -1,9 +1,11 @@
 using System;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 
-namespace monogame.Planet;
+namespace monogame.Grid;
 
-internal sealed class LogicalGrid {
+// Owns tile topology and its GPU representation. Shared assets belong to GameManager.
+internal sealed class Map : IDisposable {
     internal const int Frequency = 358;
     internal const int TileCount = 10 * Frequency * Frequency + 2;
 
@@ -30,33 +32,111 @@ internal sealed class LogicalGrid {
     private readonly int[] _neighbors;
     private readonly byte[] _neighborCounts;
 
-    internal LogicalGrid() {
+    private readonly Texture2D _gridTiles;
+    private readonly Texture2D _gridSeeds;
+    private readonly Texture2D _gridFaces;
+    private readonly Texture2D _tileDisplayColors;
+
+    private readonly EffectParameter _gridTilesParameter;
+    private readonly EffectParameter _gridSeedsParameter;
+    private readonly EffectParameter _gridFacesParameter;
+    private readonly EffectParameter _tileDisplayColorsParameter;
+    private readonly EffectParameter _gridDataWidthParameter;
+    private readonly EffectParameter _gridFrequencyParameter;
+
+    internal Map() {
+        var graphicsDevice = GameManager.GraphicsDevice;
+        var effect = GameManager.SurfaceEffect;
+        _gridTilesParameter = GetRequiredParameter(effect, "GridTiles");
+        _gridSeedsParameter = GetRequiredParameter(effect, "GridSeeds");
+        _gridFacesParameter = GetRequiredParameter(effect, "GridFaces");
+        _tileDisplayColorsParameter = GetRequiredParameter(effect, "TileDisplayColors");
+        _gridDataWidthParameter = GetRequiredParameter(effect, "GridDataWidth");
+        _gridFrequencyParameter = GetRequiredParameter(effect, "GridFrequency");
+
         _baseVertices = CreateBaseVertices();
         _edgeIds = CreateEdgeIds();
         _faceProjections = CreateFaceProjections();
         _tileCenters = CreateTileCenters();
         (_neighbors, _neighborCounts) = CreateNeighbors();
         ValidateTopology();
+        var gridData = CreateGpuData();
+        try {
+            _gridTiles = CreateGridTexture(graphicsDevice, gridData.Width, gridData.Tiles, SurfaceFormat.Vector4);
+            _gridSeeds = CreateGridTexture(graphicsDevice, gridData.Width, gridData.Seeds, SurfaceFormat.Single);
+            _gridFaces = CreateGridTexture(graphicsDevice, 5, gridData.Faces, SurfaceFormat.Vector4);
+            _tileDisplayColors = new Texture2D(graphicsDevice, gridData.Width,
+                (TileCount + gridData.Width - 1) / gridData.Width, false, SurfaceFormat.Color);
+            UpdateDisplayColors(0, CreateInitialDisplayColors());
+        }
+        catch {
+            _tileDisplayColors?.Dispose();
+            _gridFaces?.Dispose();
+            _gridSeeds?.Dispose();
+            _gridTiles?.Dispose();
+            throw;
+        }
+    }
+
+    // Bind existing resources before the geometry draw; no data is uploaded here.
+    internal void Bind() {
+        _gridTilesParameter.SetValue(_gridTiles);
+        _gridSeedsParameter.SetValue(_gridSeeds);
+        _gridFacesParameter.SetValue(_gridFaces);
+        _tileDisplayColorsParameter.SetValue(_tileDisplayColors);
+        _gridDataWidthParameter.SetValue(_gridTiles.Width);
+        _gridFrequencyParameter.SetValue(Frequency);
+    }
+
+    // Call on the graphics thread before drawing.
+    internal void UpdateDisplayColors(int firstTileId, Color[] colors) {
+        ArgumentNullException.ThrowIfNull(colors);
+        if (firstTileId < 0 || firstTileId > TileCount
+            || colors.Length > TileCount - firstTileId) {
+            throw new ArgumentOutOfRangeException(nameof(firstTileId));
+        }
+
+        var width = _tileDisplayColors.Width;
+        var offset = 0;
+        while (offset < colors.Length) {
+            var tile = firstTileId + offset;
+            var x = tile % width;
+            var remaining = colors.Length - offset;
+            var rows = x == 0 ? remaining / width : 0;
+            var region = rows > 0
+                ? new Rectangle(0, tile / width, width, rows)
+                : new Rectangle(x, tile / width, Math.Min(width - x, remaining), 1);
+            var count = region.Width * region.Height;
+            _tileDisplayColors.SetData(0, region, colors, offset, count);
+            offset += count;
+        }
+    }
+
+    public void Dispose() {
+        _tileDisplayColors.Dispose();
+        _gridFaces.Dispose();
+        _gridSeeds.Dispose();
+        _gridTiles.Dispose();
     }
 
     // GPU tables use the same centers, adjacency and tile IDs as the CPU locator.
     // Three RGBA texels per tile: center/count, then its six neighbor IDs.
-    internal GpuGridData CreateGpuData() {
+    private GpuGridData CreateGpuData() {
         const int width = 2048;
         var tiles = new Vector4[((TileCount * 3 + width - 1) / width) * width];
         for (var tile = 0; tile < TileCount; tile++) {
-            tiles[tile * 3] = new Vector4(_tileCenters[tile], _neighborCounts[tile]);
-            var offset = tile * MaximumNeighborCount;
+            var neighbors = GetNeighbors(tile);
+            tiles[tile * 3] = new Vector4(GetCenter(tile), neighbors.Length);
             tiles[tile * 3 + 1] = new Vector4(
-                _neighbors[offset], _neighbors[offset + 1], _neighbors[offset + 2], 0);
+                neighbors[0], neighbors[1], neighbors[2], 0);
             tiles[tile * 3 + 2] = new Vector4(
-                _neighbors[offset + 3], _neighbors[offset + 4], _neighbors[offset + 5], 0);
+                neighbors[3], neighbors[4], neighbors.Length == 6 ? neighbors[5] : 0, 0);
         }
 
         var samplesPerFace = (Frequency + 1) * (Frequency + 2) / 2;
-        var seeds = new float[((BaseFaceCount * samplesPerFace + width - 1) / width) * width];
+        var seeds = new float[((FaceProjections.Length * samplesPerFace + width - 1) / width) * width];
         var next = 0;
-        for (var face = 0; face < BaseFaceCount; face++) {
+        for (var face = 0; face < FaceProjections.Length; face++) {
             for (var i = 0; i <= Frequency; i++) {
                 for (var j = 0; j <= Frequency - i; j++) {
                     seeds[next++] = GetTileId(face, i, j, Frequency - i - j);
@@ -64,9 +144,9 @@ internal sealed class LogicalGrid {
             }
         }
 
-        var faces = new Vector4[BaseFaceCount * 5];
-        for (var face = 0; face < BaseFaceCount; face++) {
-            var projection = _faceProjections[face];
+        var faces = new Vector4[FaceProjections.Length * 5];
+        for (var face = 0; face < FaceProjections.Length; face++) {
+            var projection = FaceProjections[face];
             faces[face * 5] = new Vector4(projection.Normal, projection.PlaneDistance);
             faces[face * 5 + 1] = new Vector4(projection.A, 0);
             faces[face * 5 + 2] = new Vector4(projection.AB, 0);
@@ -78,13 +158,69 @@ internal sealed class LogicalGrid {
         return new GpuGridData(width, tiles, seeds, faces);
     }
 
-    internal static Color[] CreateInitialDisplayColors() {
+    private static Texture2D CreateGridTexture<T>(
+        GraphicsDevice device, int width, T[] data, SurfaceFormat format
+    ) where T : struct {
+        var texture = new Texture2D(device, width, data.Length / width, false, format);
+        try {
+            texture.SetData(data);
+            return texture;
+        }
+        catch {
+            texture.Dispose();
+            throw;
+        }
+    }
+
+    private static Color[] CreateInitialDisplayColors() {
         var colors = new Color[TileCount];
         for (var tile = 0; tile < colors.Length; tile++) {
             colors[tile] = CreateIndexColor(tile);
         }
         return colors;
     }
+
+    private static Color CreateIndexColor(int tileId) {
+        var code = HashTileId((uint)tileId);
+        var red = (byte)(((code & 0x7Fu) << 1) | ((code >> 20) & 1u));
+        var green = (byte)((((code >> 7) & 0x7Fu) << 1) | ((code >> 6) & 1u));
+        var blue = (byte)((((code >> 14) & 0x7Fu) << 1) | ((code >> 13) & 1u));
+        return new Color(red, green, blue, byte.MaxValue);
+    }
+
+    private static uint HashTileId(uint tileId) {
+        if (tileId >= TileCodeMask) {
+            throw new ArgumentOutOfRangeException(nameof(tileId));
+        }
+
+        var value = tileId + 1u;
+        value ^= value >> 10;
+        value = (uint)(((ulong)value * 0x0B352Du) & TileCodeMask);
+        value ^= value >> 9;
+        value = (uint)(((ulong)value * 0x0CA68Bu) & TileCodeMask);
+        value ^= value >> 10;
+        return value & TileCodeMask;
+    }
+
+    private static EffectParameter GetRequiredParameter(Effect effect, string name) {
+        return effect.Parameters[name]
+            ?? throw new InvalidOperationException(
+                $"The surface effect is missing its {name} parameter."
+            );
+    }
+
+    private readonly record struct GpuGridData(
+        int Width,
+        Vector4[] Tiles,
+        float[] Seeds,
+        Vector4[] Faces
+    );
+    internal Vector3 GetCenter(int tileId) => _tileCenters[tileId];
+
+    internal ReadOnlySpan<int> GetNeighbors(int tileId) =>
+        _neighbors.AsSpan(tileId * MaximumNeighborCount, _neighborCounts[tileId]);
+
+    private ReadOnlySpan<FaceProjection> FaceProjections => _faceProjections;
 
     private int LocateFromProjection(in Vector3 direction) {
         var faceIndex = 0;
@@ -387,28 +523,6 @@ internal sealed class LogicalGrid {
         return FaceInteriorStart + faceIndex * FaceInteriorCount + rank;
     }
 
-    private static Color CreateIndexColor(int tileId) {
-        var code = HashTileId((uint)tileId);
-        var red = (byte)(((code & 0x7Fu) << 1) | ((code >> 20) & 1u));
-        var green = (byte)((((code >> 7) & 0x7Fu) << 1) | ((code >> 6) & 1u));
-        var blue = (byte)((((code >> 14) & 0x7Fu) << 1) | ((code >> 13) & 1u));
-        return new Color(red, green, blue, byte.MaxValue);
-    }
-
-    private static uint HashTileId(uint tileId) {
-        if (tileId >= TileCodeMask) {
-            throw new ArgumentOutOfRangeException(nameof(tileId));
-        }
-
-        var value = tileId + 1u;
-        value ^= value >> 10;
-        value = (uint)(((ulong)value * 0x0B352Du) & TileCodeMask);
-        value ^= value >> 9;
-        value = (uint)(((ulong)value * 0x0CA68Bu) & TileCodeMask);
-        value ^= value >> 10;
-        return value & TileCodeMask;
-    }
-
     private static Vector3[] CreateBaseVertices() {
         var phi = (1.0f + MathF.Sqrt(5.0f)) * 0.5f;
         var vertices = new[] {
@@ -438,10 +552,3 @@ internal sealed class LogicalGrid {
         float InverseDenominator
     );
 }
-
-internal readonly record struct GpuGridData(
-    int Width,
-    Vector4[] Tiles,
-    float[] Seeds,
-    Vector4[] Faces
-);

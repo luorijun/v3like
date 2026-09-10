@@ -1,4 +1,4 @@
-namespace monogame.Planet;
+namespace monogame.Lod;
 
 internal struct SelectionCounters {
     internal int VisitedNodes;

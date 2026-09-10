@@ -7,7 +7,7 @@ using Vector4 = System.Numerics.Vector4;
 namespace monogame.Debugging;
 
 internal sealed class DebugPanel {
-    internal bool Visible = true;
+    internal bool Visible;
     internal bool ShowSurface = true;
     internal bool ShowWireframe;
     internal bool ShowGuideLines;
@@ -24,7 +24,7 @@ internal sealed class DebugPanel {
         ImGui.SetNextWindowSizeConstraints(new Vector2(480, 240), new Vector2(float.MaxValue));
         var expanded = ImGui.Begin("Debug | Frame profiler", ref Visible);
         if (expanded) {
-            ImGui.TextDisabled("F5: show / hide   |   CPU timings, not GPU execution time");
+            ImGui.TextDisabled("F5: show / hide   |   CPU timing breakdown");
             if (ImGui.Button(profiler.Paused ? "Resume capture" : "Pause capture")) {
                 profiler.SetPaused(!profiler.Paused);
             }
@@ -43,9 +43,6 @@ internal sealed class DebugPanel {
             ImGui.Checkbox("Wireframe [F2]", ref ShowWireframe);
             ImGui.SameLine();
             ImGui.Checkbox("Guides [F3]", ref ShowGuideLines);
-            ImGui.TextUnformatted(ShowSurface
-                ? "Surface renderer: GPU direct shading"
-                : "Surface hidden | Renderer: GPU direct shading");
             ImGui.Checkbox("Freeze selection [F4]", ref SelectionFrozen);
             ImGui.Separator();
 

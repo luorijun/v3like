@@ -1,40 +1,42 @@
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
-using monogame.Planet;
+using monogame.Lod;
+using monogame.Grid;
 using monogame.Debugging;
 
 namespace monogame;
 
 public sealed class GameApp : Game {
-    private static readonly SphereConfiguration s_sphereConfiguration = new(
-        MeshResolution: 16,
-        PixelsPerCell: 32
-    );
-
     private OrbitCamera _camera;
     private Sphere _sphere;
+    private Map _map;
     private View? _prevCameraView;
 
     public GameApp() {
+        var displayMode = GraphicsAdapter.DefaultAdapter.CurrentDisplayMode;
         _ = new GraphicsDeviceManager(this) {
             GraphicsProfile = GraphicsProfile.HiDef,
-            PreferredBackBufferWidth = 1280,
-            PreferredBackBufferHeight = 720,
+            PreferredBackBufferWidth = displayMode.Width,
+            PreferredBackBufferHeight = displayMode.Height,
+            HardwareModeSwitch = false,
+            IsFullScreen = true,
         };
 
         IsMouseVisible = true;
-        Window.AllowUserResizing = true;
-        Window.Title = "Cube Sphere | GPU surface | F5 Debug";
-        Content.RootDirectory = "Content";
+        Window.Title = "Cube Sphere | F5 Debug";
     }
 
     protected override void LoadContent() {
+        GameManager.Initialize(this);
         InputManager.Initialize(this);
-        var surfaceEffect = Content.Load<Effect>("Effects/TileSurface");
         Debugger.Initialize(this);
-        _sphere = Sphere.Create(s_sphereConfiguration, GraphicsDevice, surfaceEffect);
         _camera = new OrbitCamera();
+        _map = new Map();
+        _sphere = new Sphere(new(
+            MeshResolution: 16,
+            PixelsPerCell: 32
+        ));
     }
 
     protected override void Update(GameTime gameTime) {
@@ -61,6 +63,7 @@ public sealed class GameApp : Game {
         using (Debugger.MeasureGpu()) {
             using (Debugger.Measure("Draw")) {
                 GraphicsDevice.Clear(new Color(7, 11, 18));
+                _map.Bind();
                 _sphere.Draw(_camera.View, Debugger.RenderOptions);
                 base.Draw(gameTime);
             }
@@ -70,9 +73,11 @@ public sealed class GameApp : Game {
     }
 
     protected override void UnloadContent() {
+        _sphere.Dispose();
+        _map.Dispose();
         Debugger.Dispose();
         InputManager.Dispose();
-        _sphere.Dispose();
+        GameManager.Dispose();
         base.UnloadContent();
     }
 
