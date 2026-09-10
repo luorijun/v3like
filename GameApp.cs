@@ -11,7 +11,7 @@ public sealed class GameApp : Game {
     private OrbitCamera _camera;
     private Sphere _sphere;
     private Map _map;
-    private View? _prevCameraView;
+    private View? _prevView;
 
     public GameApp() {
         var displayMode = GraphicsAdapter.DefaultAdapter.CurrentDisplayMode;
@@ -30,12 +30,36 @@ public sealed class GameApp : Game {
     protected override void LoadContent() {
         GameManager.Initialize(this);
         InputManager.Initialize(this);
-        Debugger.Initialize(this);
-        _camera = new OrbitCamera();
-        _map = new Map();
+        Debugger.Initialize(this, new(
+            UiScale: 1,
+            Visible: false,
+            Render: new(
+                Surface: true,
+                Wireframe: false,
+                Guides: false
+            ),
+            PeakMetric: PeakMetric.FrameInterval
+        ));
+        _camera = new OrbitCamera(new(
+            Fov: MathHelper.PiOver4,
+            Yaw: 0.75f,
+            Pitch: 0.35f,
+            Height: 1.8f,
+            MinHeight: 0.01f,
+            MaxHeight: 3.0f,
+            RotateSpeed: 0.005f,
+            ZoomSpeed: 0.0012f,
+            RotateHeight: 1.8f,
+            PitchLimit: 1.45f
+        ));
+        _map = new Map(new(
+            Mode: MapMode.Terrain,
+            BorderWidth: 0.15f
+        ));
         _sphere = new Sphere(new(
             MeshResolution: 16,
-            PixelsPerCell: 32
+            PixelsPerCell: 32,
+            Hysteresis: 0.15
         ));
     }
 
@@ -51,9 +75,9 @@ public sealed class GameApp : Game {
         _camera.Update(GraphicsDevice.Viewport);
         _map.Update(_camera.View);
 
-        if (!Debugger.SelectionFrozen && (!_prevCameraView.HasValue || !_prevCameraView.Value.Same(_camera.View))) {
-            _sphere.Update(_camera.View, OrbitCamera.MinimumHeight);
-            _prevCameraView = _camera.View;
+        if (!Debugger.SelectionFrozen && (!_prevView.HasValue || !_prevView.Value.Same(_camera.View))) {
+            _sphere.Update(_camera.View, _camera.MinHeight);
+            _prevView = _camera.View;
         }
 
         base.Update(gameTime);

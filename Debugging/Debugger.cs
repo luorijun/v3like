@@ -7,18 +7,32 @@ namespace monogame.Debugging;
 
 // Static facade; GameApp owns the GPU resource lifetime.
 internal static class Debugger {
-    private static readonly FrameProfiler s_profiler = new();
-    private static readonly DebugPanel s_panel = new();
+    private static FrameProfiler s_profiler;
+    private static DebugPanel s_panel;
     private static ImGuiRenderer s_renderer;
     private static GpuTimer s_gpuTimer;
     private static Microsoft.Xna.Framework.Graphics.GraphicsDevice s_device;
 
     internal static bool SelectionFrozen => s_panel.SelectionFrozen;
     internal static SphereRenderOptions RenderOptions => new(
-        s_panel.ShowSurface, s_panel.ShowWireframe, s_panel.ShowGuideLines);
+        s_panel.Surface, s_panel.Wireframe, s_panel.Guides);
 
-    internal static void Initialize(Game game) {
-        s_renderer = new ImGuiRenderer(game);
+    internal static void Initialize(Game game, in DebuggerConfig config) {
+        if (!float.IsFinite(config.UiScale) || config.UiScale <= 0) {
+            throw new System.ArgumentOutOfRangeException(nameof(config), "UI scale must be finite and positive.");
+        }
+        if (!System.Enum.IsDefined(config.PeakMetric)) {
+            throw new System.ArgumentOutOfRangeException(nameof(config), "Unknown peak metric.");
+        }
+        s_profiler = new FrameProfiler();
+        s_profiler.SetMetric(config.PeakMetric);
+        s_panel = new DebugPanel {
+            Visible = config.Visible,
+            Surface = config.Render.Surface,
+            Wireframe = config.Render.Wireframe,
+            Guides = config.Render.Guides,
+        };
+        s_renderer = new ImGuiRenderer(game, config.UiScale);
         s_device = game.GraphicsDevice;
         s_gpuTimer = new GpuTimer(s_device);
         s_device.DeviceResetting += OnDeviceResetting;
@@ -38,9 +52,9 @@ internal static class Debugger {
 
     internal static void Update(GameTime gameTime) {
         using var timing = Measure("Debug UI layout");
-        if (InputManager.IsClick(Keys.F1)) s_panel.ShowSurface = !s_panel.ShowSurface;
-        if (InputManager.IsClick(Keys.F2)) s_panel.ShowWireframe = !s_panel.ShowWireframe;
-        if (InputManager.IsClick(Keys.F3)) s_panel.ShowGuideLines = !s_panel.ShowGuideLines;
+        if (InputManager.IsClick(Keys.F1)) s_panel.Surface = !s_panel.Surface;
+        if (InputManager.IsClick(Keys.F2)) s_panel.Wireframe = !s_panel.Wireframe;
+        if (InputManager.IsClick(Keys.F3)) s_panel.Guides = !s_panel.Guides;
         if (InputManager.IsClick(Keys.F4)) s_panel.SelectionFrozen = !s_panel.SelectionFrozen;
         if (InputManager.IsClick(Keys.F5)) s_panel.Visible = !s_panel.Visible;
 
@@ -112,3 +126,10 @@ internal static class Debugger {
         }
     }
 }
+
+internal readonly record struct DebuggerConfig(
+    float UiScale,
+    bool Visible,
+    SphereRenderOptions Render,
+    PeakMetric PeakMetric
+);

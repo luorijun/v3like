@@ -50,10 +50,10 @@ internal sealed class Map : IDisposable {
     private readonly EffectParameter _borderEdgesParameter;
     private readonly EffectParameter _borderCountParameter;
     private readonly Vector4[] _borderEdges = new Vector4[MaximumNeighborCount];
-    private float _borderWidth = 0.15f;
+    private float _borderWidth;
     private int _borderCount;
 
-    internal MapMode Mode { get; private set; } = MapMode.Terrain;
+    internal MapMode Mode { get; private set; }
     internal int? TileSelected { get; private set; }
 
     // Fraction of each edge's spherical distance to the tile center.
@@ -69,7 +69,12 @@ internal sealed class Map : IDisposable {
         }
     }
 
-    internal Map() {
+    internal Map(in MapConfig config) {
+        if (!Enum.IsDefined(config.Mode)) {
+            throw new ArgumentOutOfRangeException(nameof(config), "Unknown map mode.");
+        }
+        Mode = config.Mode;
+        BorderWidth = config.BorderWidth;
         var graphicsDevice = GameManager.GraphicsDevice;
         var effect = GameManager.SurfaceEffect;
         _gridTilesParameter = GetRequiredParameter(effect, "GridTiles");
@@ -627,3 +632,8 @@ internal sealed class Map : IDisposable {
         float InverseDenominator
     );
 }
+
+internal readonly record struct MapConfig(
+    MapMode Mode,
+    float BorderWidth
+);

@@ -32,7 +32,7 @@ internal sealed class ImGuiRenderer : IDisposable {
     private bool _layoutReady;
     private readonly List<char> _textInput = [];
 
-    internal unsafe ImGuiRenderer(Game game) {
+    internal unsafe ImGuiRenderer(Game game, float uiScale) {
         _game = game;
         _device = game.GraphicsDevice;
         _context = ImGui.CreateContext();
@@ -40,9 +40,9 @@ internal sealed class ImGuiRenderer : IDisposable {
         io.NativePtr->IniFilename = null;
         io.BackendFlags |= ImGuiBackendFlags.RendererHasVtxOffset;
         io.ConfigFlags |= ImGuiConfigFlags.NavEnableKeyboard;
-        io.FontGlobalScale = 1.15f;
+        io.FontGlobalScale = uiScale;
         ImGui.StyleColorsDark();
-        ImGui.GetStyle().ScaleAllSizes(1.15f);
+        ImGui.GetStyle().ScaleAllSizes(uiScale);
         io.Fonts.GetTexDataAsRGBA32(out IntPtr pixels, out int width, out int height, out _);
         var colors = new byte[width * height * 4];
         Marshal.Copy(pixels, colors, 0, colors.Length);

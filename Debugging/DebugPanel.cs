@@ -8,9 +8,9 @@ namespace monogame.Debugging;
 
 internal sealed class DebugPanel {
     internal bool Visible;
-    internal bool ShowSurface = true;
-    internal bool ShowWireframe;
-    internal bool ShowGuideLines;
+    internal bool Surface;
+    internal bool Wireframe;
+    internal bool Guides;
     internal bool SelectionFrozen;
     private bool _selfTime;
     private float _zoom = 1;
@@ -38,11 +38,11 @@ internal sealed class DebugPanel {
                 ImGui.EndCombo();
             }
 
-            ImGui.Checkbox("Surface [F1]", ref ShowSurface);
+            ImGui.Checkbox("Surface [F1]", ref Surface);
             ImGui.SameLine();
-            ImGui.Checkbox("Wireframe [F2]", ref ShowWireframe);
+            ImGui.Checkbox("Wireframe [F2]", ref Wireframe);
             ImGui.SameLine();
-            ImGui.Checkbox("Guides [F3]", ref ShowGuideLines);
+            ImGui.Checkbox("Guides [F3]", ref Guides);
             ImGui.Checkbox("Freeze selection [F4]", ref SelectionFrozen);
             ImGui.Separator();
 

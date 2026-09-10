@@ -17,7 +17,7 @@ internal sealed class Sphere : IDisposable {
     private const int LodColorCycleLength = 6;
     private const float LodColorSaturation = 0.72f;
     private const float LodColorBrightness = 0.9f;
-    private const double LodHysteresisRatio = 0.15;
+    private readonly double _hysteresis;
 
     private readonly List<Chunk> _activeChunks = [];
     private readonly Effect _surfaceEffect;
@@ -29,36 +29,37 @@ internal sealed class Sphere : IDisposable {
     private readonly EffectParameter _chunkSizeParameter;
     private readonly EffectParameter _solidColorParameter;
     private readonly BasicEffect _guideLineEffect;
-    private readonly VertexBuffer _chunkMeshVertexBuffer;
-    private readonly IndexBuffer _chunkMeshIndexBuffer;
-    private readonly VertexBuffer _guideLineVertexBuffer;
-    private readonly int _chunkMeshPrimitiveCount;
-    private readonly int _guideLinePrimitiveCount;
-    private readonly RasterizerState _solidRasterizerState;
-    private readonly RasterizerState _wireframeRasterizerState;
+    private readonly VertexBuffer _meshVertices;
+    private readonly IndexBuffer _meshIndices;
+    private readonly VertexBuffer _guideVertices;
+    private readonly int _meshPrimitives;
+    private readonly int _guidePrimitives;
+    private readonly RasterizerState _solidRasterizer;
+    private readonly RasterizerState _wireRasterizer;
     private readonly int _meshResolution;
     private readonly double _pixelsPerCell;
-    private SelectionCounters _selectionCounters;
-    private SelectionMetrics _selectionMetrics;
-    private int _targetLodLevel = -1;
+    private SelectionCounters _counters;
+    private SelectionMetrics _metrics;
+    private int _lod = -1;
 
-    internal Sphere(in SphereConfiguration configuration) {
-        ValidateConfiguration(configuration);
+    internal Sphere(in SphereConfig config) {
+        ValidateConfig(config);
 
-        _meshResolution = configuration.MeshResolution;
-        _pixelsPerCell = configuration.PixelsPerCell;
+        _meshResolution = config.MeshResolution;
+        _pixelsPerCell = config.PixelsPerCell;
+        _hysteresis = config.Hysteresis;
 
         var meshVertexCount = checked(_meshResolution + 1);
-        _chunkMeshVertexBuffer = CreateChunkMeshVertexBuffer(meshVertexCount);
+        _meshVertices = CreateChunkMeshVertexBuffer(meshVertexCount);
         var indices = Mesh.CreateTriangleIndices(meshVertexCount);
-        _chunkMeshIndexBuffer = new IndexBuffer(
+        _meshIndices = new IndexBuffer(
             GameManager.GraphicsDevice,
             IndexElementSize.SixteenBits,
             indices.Length,
             BufferUsage.WriteOnly
         );
-        _chunkMeshIndexBuffer.SetData(indices);
-        _chunkMeshPrimitiveCount = indices.Length / 3;
+        _meshIndices.SetData(indices);
+        _meshPrimitives = indices.Length / 3;
 
         _surfaceEffect = GameManager.SurfaceEffect;
         _surfaceTechnique = GetRequiredTechnique(_surfaceEffect, "TileSurface");
@@ -74,77 +75,77 @@ internal sealed class Sphere : IDisposable {
             LightingEnabled = false,
             TextureEnabled = false,
         };
-        _guideLineVertexBuffer = CreateGuideLineVertexBuffer();
-        _guideLinePrimitiveCount = _guideLineVertexBuffer.VertexCount / 2;
+        _guideVertices = CreateGuideLineVertexBuffer();
+        _guidePrimitives = _guideVertices.VertexCount / 2;
 
-        _solidRasterizerState = new RasterizerState {
+        _solidRasterizer = new RasterizerState {
             CullMode = CullMode.CullClockwiseFace,
             FillMode = FillMode.Solid,
         };
-        _wireframeRasterizerState = new RasterizerState {
+        _wireRasterizer = new RasterizerState {
             CullMode = CullMode.CullClockwiseFace,
             FillMode = FillMode.WireFrame,
             DepthBias = WireframeDepthBias,
         };
     }
 
-    internal SelectionMetrics Metrics => _selectionMetrics;
+    internal SelectionMetrics Metrics => _metrics;
 
-    internal void Update(in View view, double minimumHeight) {
+    internal void Update(in View view, double minHeight) {
         using var timing = Debugger.Measure("Chunk selection");
-        var maxLod = SelectTargetLodLevel(view.FocalLength, minimumHeight, 0);
-        _targetLodLevel = SelectTargetLodLevel(view.FocalLength,
-            Math.Max(view.CameraLength - 1.0, minimumHeight),
-            Math.Clamp(_targetLodLevel, 0, maxLod));
+        var maxLod = SelectTargetLodLevel(view.FocalLength, minHeight, 0);
+        _lod = SelectTargetLodLevel(view.FocalLength,
+            Math.Max(view.CameraLength - 1.0, minHeight),
+            Math.Clamp(_lod, 0, maxLod));
         _activeChunks.Clear();
-        _selectionCounters = default;
+        _counters = default;
 
         for (var face = 0; face < CubeFaceCount; face++) {
             SelectVisibleChunks(new Chunk((FaceId)face, 0, 0, 0), view);
         }
 
-        _selectionMetrics = new SelectionMetrics(
-            _targetLodLevel,
+        _metrics = new SelectionMetrics(
+            _lod,
             maxLod,
-            _selectionCounters.VisitedNodes,
+            _counters.VisitedNodes,
             _activeChunks.Count,
-            _selectionCounters.HorizonRejected,
-            _selectionCounters.FrustumRejected
+            _counters.HorizonRejected,
+            _counters.FrustumRejected
         );
     }
 
     internal void Draw(in View view, in SphereRenderOptions options) {
         _worldViewProjectionParameter.SetValue(view.ViewProjection);
-        GameManager.GraphicsDevice.SetVertexBuffer(_chunkMeshVertexBuffer);
-        GameManager.GraphicsDevice.Indices = _chunkMeshIndexBuffer;
+        GameManager.GraphicsDevice.SetVertexBuffer(_meshVertices);
+        GameManager.GraphicsDevice.Indices = _meshIndices;
 
-        if (options.ShowSurface) {
+        if (options.Surface) {
             DrawSurface();
         }
 
-        if (options.ShowWireframe) {
+        if (options.Wireframe) {
             DrawWireframe();
         }
 
-        if (options.ShowGuideLines) {
+        if (options.Guides) {
             DrawGuideLines(view.ViewProjection);
         }
     }
 
     public void Dispose() {
-        _wireframeRasterizerState.Dispose();
-        _solidRasterizerState.Dispose();
-        _guideLineVertexBuffer.Dispose();
-        _chunkMeshIndexBuffer.Dispose();
-        _chunkMeshVertexBuffer.Dispose();
+        _wireRasterizer.Dispose();
+        _solidRasterizer.Dispose();
+        _guideVertices.Dispose();
+        _meshIndices.Dispose();
+        _meshVertices.Dispose();
         _guideLineEffect.Dispose();
     }
 
     private int SelectTargetLodLevel(double focalLength, double height, int previousLevel) {
         var rootCellPixels = MathHelper.PiOver2 * focalLength / (height * _meshResolution);
 
-        var splitThreshold = _pixelsPerCell * (1.0 + LodHysteresisRatio);
-        var mergeThreshold = _pixelsPerCell * (1.0 - LodHysteresisRatio);
+        var splitThreshold = _pixelsPerCell * (1.0 + _hysteresis);
+        var mergeThreshold = _pixelsPerCell * (1.0 - _hysteresis);
         var selectedLevel = previousLevel;
         var cellPixels = Math.ScaleB(
             rootCellPixels,
@@ -165,19 +166,19 @@ internal sealed class Sphere : IDisposable {
     }
 
     private void SelectVisibleChunks(in Chunk chunk, in View view) {
-        _selectionCounters.VisitedNodes++;
+        _counters.VisitedNodes++;
         var bounds = ChunkGeometry.CalculateBounds(chunk);
         if (ChunkGeometry.IsFullyBehindHorizon(bounds, view)) {
-            _selectionCounters.HorizonRejected++;
+            _counters.HorizonRejected++;
             return;
         }
 
         if (ChunkGeometry.IsOutsideFrustum(bounds, view)) {
-            _selectionCounters.FrustumRejected++;
+            _counters.FrustumRejected++;
             return;
         }
 
-        if (chunk.Level == _targetLodLevel) {
+        if (chunk.Level == _lod) {
             _activeChunks.Add(chunk);
             return;
         }
@@ -191,7 +192,7 @@ internal sealed class Sphere : IDisposable {
         using var timing = Debugger.Measure("Surface");
         GameManager.GraphicsDevice.BlendState = BlendState.Opaque;
         GameManager.GraphicsDevice.DepthStencilState = DepthStencilState.Default;
-        GameManager.GraphicsDevice.RasterizerState = _solidRasterizerState;
+        GameManager.GraphicsDevice.RasterizerState = _solidRasterizer;
         _surfaceEffect.CurrentTechnique = _surfaceTechnique;
 
         foreach (var chunk in _activeChunks) {
@@ -204,9 +205,9 @@ internal sealed class Sphere : IDisposable {
         using var timing = Debugger.Measure("Wireframe");
         GameManager.GraphicsDevice.BlendState = BlendState.Opaque;
         GameManager.GraphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
-        GameManager.GraphicsDevice.RasterizerState = _wireframeRasterizerState;
+        GameManager.GraphicsDevice.RasterizerState = _wireRasterizer;
         _surfaceEffect.CurrentTechnique = _wireframeTechnique;
-        _solidColorParameter.SetValue(CreateLodColor(_targetLodLevel));
+        _solidColorParameter.SetValue(CreateLodColor(_lod));
 
         foreach (var chunk in _activeChunks) {
             ConfigureChunk(chunk);
@@ -228,7 +229,7 @@ internal sealed class Sphere : IDisposable {
                 PrimitiveType.TriangleList,
                 0,
                 0,
-                _chunkMeshPrimitiveCount
+                _meshPrimitives
             );
         }
     }
@@ -241,14 +242,14 @@ internal sealed class Sphere : IDisposable {
         GameManager.GraphicsDevice.BlendState = BlendState.Opaque;
         GameManager.GraphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
         GameManager.GraphicsDevice.RasterizerState = RasterizerState.CullNone;
-        GameManager.GraphicsDevice.SetVertexBuffer(_guideLineVertexBuffer);
+        GameManager.GraphicsDevice.SetVertexBuffer(_guideVertices);
 
         foreach (var pass in _guideLineEffect.CurrentTechnique.Passes) {
             pass.Apply();
             GameManager.GraphicsDevice.DrawPrimitives(
                 PrimitiveType.LineList,
                 0,
-                _guideLinePrimitiveCount
+                _guidePrimitives
             );
         }
     }
@@ -270,26 +271,30 @@ internal sealed class Sphere : IDisposable {
         return vertexBuffer;
     }
 
-    private static void ValidateConfiguration(in SphereConfiguration configuration) {
-        var resolution = configuration.MeshResolution;
+    private static void ValidateConfig(in SphereConfig config) {
+        if (!double.IsFinite(config.Hysteresis)
+            || config.Hysteresis < 0 || config.Hysteresis >= 1) {
+            throw new ArgumentOutOfRangeException(nameof(config), "LOD hysteresis ratio must be in [0, 1).");
+        }
+        var resolution = config.MeshResolution;
         if (resolution <= 0 || (resolution & (resolution - 1)) != 0) {
             throw new ArgumentOutOfRangeException(
-                nameof(configuration),
+                nameof(config),
                 "Mesh resolution must be a positive power of two."
             );
         }
 
-        if (!double.IsFinite(configuration.PixelsPerCell) || configuration.PixelsPerCell <= 0) {
+        if (!double.IsFinite(config.PixelsPerCell) || config.PixelsPerCell <= 0) {
             throw new ArgumentOutOfRangeException(
-                nameof(configuration),
+                nameof(config),
                 "Pixels per mesh cell must be finite and positive."
             );
         }
 
-        var meshVertexCount = (long)configuration.MeshResolution + 1;
+        var meshVertexCount = (long)config.MeshResolution + 1;
         if (meshVertexCount * meshVertexCount > ushort.MaxValue) {
             throw new ArgumentOutOfRangeException(
-                nameof(configuration),
+                nameof(config),
                 "Mesh resolution must fit in a 16-bit indexed mesh."
             );
         }
@@ -379,12 +384,13 @@ internal sealed class Sphere : IDisposable {
 }
 
 internal readonly record struct SphereRenderOptions(
-    bool ShowSurface,
-    bool ShowWireframe,
-    bool ShowGuideLines
+    bool Surface,
+    bool Wireframe,
+    bool Guides
 );
 
-internal readonly record struct SphereConfiguration(
+internal readonly record struct SphereConfig(
     int MeshResolution,
-    double PixelsPerCell
+    double PixelsPerCell,
+    double Hysteresis
 );
