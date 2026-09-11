@@ -53,7 +53,7 @@ public sealed class GameApp : Game {
             PitchLimit: 1.45f
         ));
         _map = new Map(new(
-            Mode: MapMode.Surface,
+            Mode: MapMode.Terrain,
             BorderWidth: 0.15f
         ));
         _sphere = new Sphere(new(

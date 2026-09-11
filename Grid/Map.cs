@@ -6,7 +6,9 @@ using SurfaceKind = monogame.Asset.SurfaceKind;
 
 namespace monogame.Grid;
 
-internal enum MapMode { Raw = 0, Surface = 1, Terrain = 2 }
+internal enum MapMode { Raw = 0, Terrain = 1 }
+
+internal enum TerrainKind { Plain, Hill, Mountain, ShallowWater, DeepWater }
 
 // Owns tile topology, interaction and display data. Shared assets belong to GameManager.
 internal sealed class Map : IDisposable {
@@ -21,22 +23,6 @@ internal sealed class Map : IDisposable {
     private const int FaceInteriorStart = BaseVertexCount + BaseEdgeCount * EdgeInteriorCount;
     private const int MaximumNeighborCount = 6;
     private const uint TileCodeMask = (1u << 21) - 1u;
-
-    private static readonly (int Height, Color Color)[] s_seaColors = [
-        (-8000, new Color(16, 42, 67)),
-        (-4000, new Color(30, 82, 120)),
-        (-1000, new Color(50, 127, 163)),
-        (0, new Color(120, 185, 199)),
-    ];
-
-    private static readonly (int Height, Color Color)[] s_landColors = [
-        (0, new Color(83, 117, 76)),
-        (500, new Color(129, 147, 92)),
-        (1500, new Color(176, 161, 109)),
-        (3000, new Color(146, 119, 93)),
-        (5000, new Color(213, 209, 200)),
-        (8000, new Color(240, 239, 233)),
-    ];
 
     private static readonly int[,] s_faces = {
         { 0, 11, 5 }, { 0, 5, 1 }, { 0, 1, 7 }, { 0, 7, 10 }, { 0, 10, 11 },
@@ -130,8 +116,7 @@ internal sealed class Map : IDisposable {
 
     internal void Update(in View view) {
         if (InputManager.IsClick(Keys.D0, InputFocus.Scene)) SetMode(MapMode.Raw);
-        if (InputManager.IsClick(Keys.D1, InputFocus.Scene)) SetMode(MapMode.Surface);
-        if (InputManager.IsClick(Keys.D2, InputFocus.Scene)) SetMode(MapMode.Terrain);
+        if (InputManager.IsClick(Keys.D1, InputFocus.Scene)) SetMode(MapMode.Terrain);
 
         if (!InputManager.IsClick(MouseButton.Left, InputFocus.Scene)) return;
 
@@ -268,22 +253,9 @@ internal sealed class Map : IDisposable {
 
     private static Color[] CreateDisplayColors(MapMode mode) {
         var colors = new Color[TileCount];
-        if (mode == MapMode.Surface) {
-            var surface = GameManager.Surface;
-            for (var tile = 0; tile < colors.Length; tile++) {
-                colors[tile] = surface.GetKind(tile) switch {
-                    SurfaceKind.Ocean => new Color(30, 82, 120),
-                    SurfaceKind.Land => new Color(83, 117, 76),
-                    SurfaceKind.Lake => new Color(70, 170, 190),
-                    _ => throw new InvalidOperationException("Unknown surface category."),
-                };
-            }
-            return colors;
-        }
         if (mode == MapMode.Terrain) {
-            var terrain = GameManager.Terrain;
             for (var tile = 0; tile < colors.Length; tile++) {
-                colors[tile] = GetTerrainColor(terrain.GetHeight(tile));
+                colors[tile] = GetTerrainColor(tile);
             }
             return colors;
         }
@@ -293,17 +265,30 @@ internal sealed class Map : IDisposable {
         return colors;
     }
 
-    private static Color GetTerrainColor(short height) {
-        var stops = height < 0 ? s_seaColors : s_landColors;
-        if (height <= stops[0].Height) return stops[0].Color;
-        for (var index = 1; index < stops.Length; index++) {
-            var upper = stops[index];
-            if (height > upper.Height) continue;
-            var lower = stops[index - 1];
-            var amount = (float)(height - lower.Height) / (upper.Height - lower.Height);
-            return Color.Lerp(lower.Color, upper.Color, amount);
-        }
-        return stops[^1].Color;
+    private static Color GetTerrainColor(int tile) {
+        var surface = GameManager.Surface.GetKind(tile);
+        // Lake elevation does not describe water depth.
+        if (surface == SurfaceKind.Lake) return new Color(70, 170, 190);
+
+        // Temporary elevation bands; surface identity always takes precedence.
+        var height = GameManager.Terrain.GetHeight(tile);
+        var kind = surface switch {
+            SurfaceKind.Land => height switch {
+                < 200 => TerrainKind.Plain,
+                < 500 => TerrainKind.Hill,
+                _ => TerrainKind.Mountain,
+            },
+            SurfaceKind.Ocean => height >= -200 ? TerrainKind.ShallowWater : TerrainKind.DeepWater,
+            _ => throw new InvalidOperationException("Unknown surface category."),
+        };
+        return kind switch {
+            TerrainKind.Plain => new Color(83, 117, 76),
+            TerrainKind.Hill => new Color(176, 161, 109),
+            TerrainKind.Mountain => new Color(146, 119, 93),
+            TerrainKind.ShallowWater => new Color(120, 185, 199),
+            TerrainKind.DeepWater => new Color(30, 82, 120),
+            _ => throw new InvalidOperationException("Unknown terrain category."),
+        };
     }
 
     private static Color CreateIndexColor(int tileId) {
