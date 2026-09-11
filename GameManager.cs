@@ -2,15 +2,17 @@ using System;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Content;
 using Microsoft.Xna.Framework.Graphics;
+using monogame.Asset;
 
 namespace monogame;
 
-// Loads shared assets through the game's content manager; MonoGame owns both services.
+// Owns shared assets. MonoGame owns the content manager and graphics device.
 internal static class GameManager {
     private static ContentManager s_content;
 
     internal static GraphicsDevice GraphicsDevice { get; private set; }
     internal static Effect SurfaceEffect { get; private set; }
+    internal static TerrainData Terrain { get; private set; }
 
     internal static void Initialize(Game game) {
         if (s_content != null) {
@@ -18,7 +20,9 @@ internal static class GameManager {
         }
 
         game.Content.RootDirectory = "Content";
+        var terrain = TerrainReader.Read();
         SurfaceEffect = game.Content.Load<Effect>("Effects/TileSurface");
+        Terrain = terrain;
         GraphicsDevice = game.GraphicsDevice;
         s_content = game.Content;
     }
@@ -28,6 +32,7 @@ internal static class GameManager {
         s_content?.Unload();
         s_content = null;
         SurfaceEffect = null;
+        Terrain = null;
         GraphicsDevice = null;
     }
 }

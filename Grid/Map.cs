@@ -21,6 +21,22 @@ internal sealed class Map : IDisposable {
     private const int MaximumNeighborCount = 6;
     private const uint TileCodeMask = (1u << 21) - 1u;
 
+    private static readonly (int Height, Color Color)[] s_seaColors = [
+        (-8000, new Color(16, 42, 67)),
+        (-4000, new Color(30, 82, 120)),
+        (-1000, new Color(50, 127, 163)),
+        (0, new Color(120, 185, 199)),
+    ];
+
+    private static readonly (int Height, Color Color)[] s_landColors = [
+        (0, new Color(83, 117, 76)),
+        (500, new Color(129, 147, 92)),
+        (1500, new Color(176, 161, 109)),
+        (3000, new Color(146, 119, 93)),
+        (5000, new Color(213, 209, 200)),
+        (8000, new Color(240, 239, 233)),
+    ];
+
     private static readonly int[,] s_faces = {
         { 0, 11, 5 }, { 0, 5, 1 }, { 0, 1, 7 }, { 0, 7, 10 }, { 0, 10, 11 },
         { 1, 5, 9 }, { 5, 11, 4 }, { 11, 10, 2 }, { 10, 7, 6 }, { 7, 1, 8 },
@@ -28,9 +44,11 @@ internal sealed class Map : IDisposable {
         { 4, 9, 5 }, { 2, 4, 11 }, { 6, 2, 10 }, { 8, 6, 7 }, { 9, 8, 1 },
     };
 
-    private readonly Vector3[] _baseVertices;
+    // Fixed base geometry and numbering; initialized once and never mutated.
+    private static readonly Vector3[] s_baseVertices = CreateBaseVertices();
+    private static readonly int[] s_edgeIds = CreateEdgeIds();
+
     private readonly FaceProjection[] _faceProjections;
-    private readonly int[] _edgeIds;
     private readonly Vector3[] _tileCenters;
     private readonly int[] _neighbors;
     private readonly byte[] _neighborCounts;
@@ -87,8 +105,6 @@ internal sealed class Map : IDisposable {
         _borderEdgesParameter = GetRequiredParameter(effect, "BorderEdges");
         _borderCountParameter = GetRequiredParameter(effect, "BorderCount");
 
-        _baseVertices = CreateBaseVertices();
-        _edgeIds = CreateEdgeIds();
         _faceProjections = CreateFaceProjections();
         _tileCenters = CreateTileCenters();
         (_neighbors, _neighborCounts) = CreateNeighbors();
@@ -251,13 +267,29 @@ internal sealed class Map : IDisposable {
     private static Color[] CreateDisplayColors(MapMode mode) {
         var colors = new Color[TileCount];
         if (mode == MapMode.Terrain) {
-            Array.Fill(colors, new Color(83, 117, 76));
+            var terrain = GameManager.Terrain;
+            for (var tile = 0; tile < colors.Length; tile++) {
+                colors[tile] = GetTerrainColor(terrain.GetHeight(tile));
+            }
             return colors;
         }
         for (var tile = 0; tile < colors.Length; tile++) {
             colors[tile] = CreateIndexColor(tile);
         }
         return colors;
+    }
+
+    private static Color GetTerrainColor(short height) {
+        var stops = height < 0 ? s_seaColors : s_landColors;
+        if (height <= stops[0].Height) return stops[0].Color;
+        for (var index = 1; index < stops.Length; index++) {
+            var upper = stops[index];
+            if (height > upper.Height) continue;
+            var lower = stops[index - 1];
+            var amount = (float)(height - lower.Height) / (upper.Height - lower.Height);
+            return Color.Lerp(lower.Color, upper.Color, amount);
+        }
+        return stops[^1].Color;
     }
 
     private static Color CreateIndexColor(int tileId) {
@@ -380,9 +412,9 @@ internal sealed class Map : IDisposable {
         }
     }
 
-    private Vector3[] CreateTileCenters() {
+    internal static Vector3[] CreateTileCenters() {
         var centers = new Vector3[TileCount];
-        Array.Copy(_baseVertices, centers, BaseVertexCount);
+        Array.Copy(s_baseVertices, centers, BaseVertexCount);
 
         for (var first = 0; first < BaseVertexCount; first++) {
             for (var second = first + 1; second < BaseVertexCount; second++) {
@@ -392,8 +424,8 @@ internal sealed class Map : IDisposable {
                 }
 
                 for (var t = 1; t < Frequency; t++) {
-                    var point = _baseVertices[first] * (Frequency - t)
-                        + _baseVertices[second] * t;
+                    var point = s_baseVertices[first] * (Frequency - t)
+                        + s_baseVertices[second] * t;
                     centers[GetEdgeTileId(first, second, Frequency - t, t)] =
                         Vector3.Normalize(point);
                 }
@@ -401,9 +433,9 @@ internal sealed class Map : IDisposable {
         }
 
         for (var faceIndex = 0; faceIndex < BaseFaceCount; faceIndex++) {
-            var a = _baseVertices[s_faces[faceIndex, 0]];
-            var b = _baseVertices[s_faces[faceIndex, 1]];
-            var c = _baseVertices[s_faces[faceIndex, 2]];
+            var a = s_baseVertices[s_faces[faceIndex, 0]];
+            var b = s_baseVertices[s_faces[faceIndex, 1]];
+            var c = s_baseVertices[s_faces[faceIndex, 2]];
             for (var i = 1; i <= Frequency - 2; i++) {
                 for (var j = 1; j <= Frequency - i - 1; j++) {
                     var k = Frequency - i - j;
@@ -417,7 +449,7 @@ internal sealed class Map : IDisposable {
         return centers;
     }
 
-    private (int[] Neighbors, byte[] Counts) CreateNeighbors() {
+    private static (int[] Neighbors, byte[] Counts) CreateNeighbors() {
         var neighbors = new int[TileCount * MaximumNeighborCount];
         var counts = new byte[TileCount];
         ReadOnlySpan<(int I, int J, int K)> directions = [
@@ -452,7 +484,7 @@ internal sealed class Map : IDisposable {
         return (neighbors, counts);
     }
 
-    private void AddNeighbor(int[] neighbors, byte[] counts, int tileId, int neighborId) {
+    private static void AddNeighbor(int[] neighbors, byte[] counts, int tileId, int neighborId) {
         var offset = tileId * MaximumNeighborCount;
         for (var index = 0; index < counts[tileId]; index++) {
             if (neighbors[offset + index] == neighborId) {
@@ -490,12 +522,12 @@ internal sealed class Map : IDisposable {
         }
     }
 
-    private FaceProjection[] CreateFaceProjections() {
+    private static FaceProjection[] CreateFaceProjections() {
         var projections = new FaceProjection[BaseFaceCount];
         for (var faceIndex = 0; faceIndex < BaseFaceCount; faceIndex++) {
-            var a = _baseVertices[s_faces[faceIndex, 0]];
-            var b = _baseVertices[s_faces[faceIndex, 1]];
-            var c = _baseVertices[s_faces[faceIndex, 2]];
+            var a = s_baseVertices[s_faces[faceIndex, 0]];
+            var b = s_baseVertices[s_faces[faceIndex, 1]];
+            var c = s_baseVertices[s_faces[faceIndex, 2]];
             var ab = b - a;
             var ac = c - a;
             var normal = Vector3.Normalize(Vector3.Cross(ab, ac));
@@ -524,7 +556,7 @@ internal sealed class Map : IDisposable {
         return projections;
     }
 
-    private int[] CreateEdgeIds() {
+    private static int[] CreateEdgeIds() {
         var connected = new bool[BaseVertexCount * BaseVertexCount];
         for (var faceIndex = 0; faceIndex < BaseFaceCount; faceIndex++) {
             MarkConnected(s_faces[faceIndex, 0], s_faces[faceIndex, 1]);
@@ -561,7 +593,7 @@ internal sealed class Map : IDisposable {
         }
     }
 
-    private int GetTileId(int faceIndex, int i, int j, int k) {
+    private static int GetTileId(int faceIndex, int i, int j, int k) {
         var a = s_faces[faceIndex, 0];
         var b = s_faces[faceIndex, 1];
         var c = s_faces[faceIndex, 2];
@@ -588,14 +620,14 @@ internal sealed class Map : IDisposable {
         return GetFaceInteriorTileId(faceIndex, i, j);
     }
 
-    private int GetEdgeTileId(int first, int second, int firstWeight, int secondWeight) {
+    private static int GetEdgeTileId(int first, int second, int firstWeight, int secondWeight) {
         var edgeId = GetEdgeId(first, second);
         var t = first < second ? secondWeight : firstWeight;
         return BaseVertexCount + edgeId * EdgeInteriorCount + t - 1;
     }
 
-    private int GetEdgeId(int first, int second) {
-        return _edgeIds[first * BaseVertexCount + second];
+    private static int GetEdgeId(int first, int second) {
+        return s_edgeIds[first * BaseVertexCount + second];
     }
 
     private static int GetFaceInteriorTileId(int faceIndex, int i, int j) {
