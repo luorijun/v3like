@@ -12,6 +12,7 @@ internal static class GameManager {
 
     internal static GraphicsDevice GraphicsDevice { get; private set; }
     internal static Effect SurfaceEffect { get; private set; }
+    internal static SurfaceData Surface { get; private set; }
     internal static TerrainData Terrain { get; private set; }
 
     internal static void Initialize(Game game) {
@@ -20,8 +21,10 @@ internal static class GameManager {
         }
 
         game.Content.RootDirectory = "Content";
+        var surface = SurfaceReader.Read();
         var terrain = TerrainReader.Read();
         SurfaceEffect = game.Content.Load<Effect>("Effects/TileSurface");
+        Surface = surface;
         Terrain = terrain;
         GraphicsDevice = game.GraphicsDevice;
         s_content = game.Content;
@@ -32,6 +35,7 @@ internal static class GameManager {
         s_content?.Unload();
         s_content = null;
         SurfaceEffect = null;
+        Surface = null;
         Terrain = null;
         GraphicsDevice = null;
     }

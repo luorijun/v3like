@@ -2,10 +2,11 @@ using System;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
+using SurfaceKind = monogame.Asset.SurfaceKind;
 
 namespace monogame.Grid;
 
-internal enum MapMode { Raw = 0, Terrain = 1 }
+internal enum MapMode { Raw = 0, Surface = 1, Terrain = 2 }
 
 // Owns tile topology, interaction and display data. Shared assets belong to GameManager.
 internal sealed class Map : IDisposable {
@@ -129,7 +130,8 @@ internal sealed class Map : IDisposable {
 
     internal void Update(in View view) {
         if (InputManager.IsClick(Keys.D0, InputFocus.Scene)) SetMode(MapMode.Raw);
-        if (InputManager.IsClick(Keys.D1, InputFocus.Scene)) SetMode(MapMode.Terrain);
+        if (InputManager.IsClick(Keys.D1, InputFocus.Scene)) SetMode(MapMode.Surface);
+        if (InputManager.IsClick(Keys.D2, InputFocus.Scene)) SetMode(MapMode.Terrain);
 
         if (!InputManager.IsClick(MouseButton.Left, InputFocus.Scene)) return;
 
@@ -266,6 +268,18 @@ internal sealed class Map : IDisposable {
 
     private static Color[] CreateDisplayColors(MapMode mode) {
         var colors = new Color[TileCount];
+        if (mode == MapMode.Surface) {
+            var surface = GameManager.Surface;
+            for (var tile = 0; tile < colors.Length; tile++) {
+                colors[tile] = surface.GetKind(tile) switch {
+                    SurfaceKind.Ocean => new Color(30, 82, 120),
+                    SurfaceKind.Land => new Color(83, 117, 76),
+                    SurfaceKind.Lake => new Color(70, 170, 190),
+                    _ => throw new InvalidOperationException("Unknown surface category."),
+                };
+            }
+            return colors;
+        }
         if (mode == MapMode.Terrain) {
             var terrain = GameManager.Terrain;
             for (var tile = 0; tile < colors.Length; tile++) {
